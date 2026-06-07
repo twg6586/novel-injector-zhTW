@@ -42,6 +42,13 @@ import {
     _u8,
 } from './lib/zip-utils.js';
 
+import {
+    NI_THEME_BUILTIN_PRESETS,
+    NI_THEME_DEFAULT,
+    niApplyThemeSettings,
+    niNormalizeHex,
+} from './lib/theme-utils.js';
+
 // ============================================================
 // 常量
 // ============================================================
@@ -558,6 +565,17 @@ const DEFAULT_SETTINGS = {
     apiRateLimit: 3,    // 每分钟最多请求次数（0=不限）
     vecRateLimit: 3,    // 向量化每分钟最多请求次数（0=不限）
     pluginEnabled: true,  // 插件总开关
+    themePreset: 'default',
+    themePrimary: NI_THEME_DEFAULT.primary,
+    themeSuccess: NI_THEME_DEFAULT.success,
+    themePivot: NI_THEME_DEFAULT.pivot,
+    themeWarning: NI_THEME_DEFAULT.warning,
+    themeSurfaceFollowPreset: true,
+    themeBorderless: false,
+    themeBackground: NI_THEME_DEFAULT.background,
+    themeText: NI_THEME_DEFAULT.text,
+    themeUserPresets: [],
+    themeDeletedPresetIds: [],
     vecInjDisabled: false, // 有向量数据但用户选择不调用向量注入
     novelLibrary: [],     // 小说快照库 [{name, key, snapshot}]
     // 世界设定注入设置
@@ -1130,7 +1148,6 @@ cfg.globalPrompt = (_gp && _gp.trim()) ? _gp : (extension_settings[EXT_NAME]?.gl
     cfg.apiTimeoutMin = Math.max(1, parseInt(q('#ni-api-timeout')?.value) || DEFAULT_SETTINGS.apiTimeoutMin);
     cfg.apiRateLimit  = Math.max(0, parseInt(q('#ni-rate-limit')?.value) ?? DEFAULT_SETTINGS.apiRateLimit);
     cfg.vecRateLimit  = Math.max(0, parseInt(q('#ni-vec-rate-limit')?.value) ?? DEFAULT_SETTINGS.vecRateLimit);
-
     // 持久化运行时数据（重数据已卸载到服务端文件，此处只存轻量索引）
     cfg._stageStates   = S.stageStates;
     cfg._stageSummaries= S.stageSummaries;
@@ -1223,6 +1240,8 @@ function syncSettingsToUI() {
     sv('#ni-api-timeout',  cfg.apiTimeoutMin ?? DEFAULT_SETTINGS.apiTimeoutMin);
     sv('#ni-rate-limit',   cfg.apiRateLimit  ?? DEFAULT_SETTINGS.apiRateLimit);
     sv('#ni-vec-rate-limit', cfg.vecRateLimit ?? DEFAULT_SETTINGS.vecRateLimit);
+    niSyncThemeUI();
+    niApplyCurrentTheme();
     const ptEl = q('#ni-pt-content');
     if (ptEl) ptEl.value = extension_settings[EXT_NAME]?.customPrompt || CLEAN_PROMPT;
     // 同步限速队列上限
@@ -4258,7 +4277,7 @@ function niToggleStageBody(i) {
         const saveBtn = document.createElement('button');
         saveBtn.className = 'ni-stage-save-btn';
         saveBtn.dataset.stageIdx = i;
-        saveBtn.style.cssText = 'display:flex !important; width:100%; justify-content:center; outline:none; border:none; background:transparent; color:#A0445E;';
+        saveBtn.style.cssText = 'display:flex !important; width:100%; justify-content:center; outline:none; border:none; background:transparent; color:var(--ni-primary, #A0445E);';
         saveBtn.innerHTML = '<i class="ti ti-check" style="font-size:11px"></i>保存';
         const cancelBtn = document.createElement('button');
         cancelBtn.className = 'ni-stage-cancel-btn';
@@ -5582,6 +5601,359 @@ async function niGenerateStyle() {
 window.niGenerateStyle = niGenerateStyle;
 
 // ============================================================
+// 设置 Tab — 外观配色
+// ============================================================
+function niApplyCurrentTheme() {
+    const cfg = extension_settings[EXT_NAME] || {};
+    niApplyThemeWithSurface(cfg);
+}
+
+function niThemeTargets() {
+    const targets = [document.documentElement, q('#ni-app')];
+    try {
+        const parentDoc = window.parent?.document;
+        if (parentDoc && parentDoc !== document) targets.push(parentDoc.documentElement);
+    } catch (_) {}
+    return targets;
+}
+
+const NI_TAVERN_SURFACE_INLINE_PROPS = [
+    '--SmartThemeBlurTintColor',
+    '--SmartThemeChatTintColor',
+    '--SmartThemeBodyColor',
+    '--SmartThemeEmColor',
+    '--SmartThemeBorderColor',
+    '--SmartThemeBlurStrength',
+    '--SmartThemeShadowColor',
+    '--shadowWidth',
+    '--ni-tavern-backdrop-filter',
+];
+
+function niClearTavernSurfaceInlineProps(app) {
+    NI_TAVERN_SURFACE_INLINE_PROPS.forEach(name => app.style.removeProperty(name));
+}
+
+function niTavernSurfaceSource(app) {
+    return app?.closest('.drawer-content')
+        || q('#ni_drawer_content')?.closest('.drawer-content')
+        || q('#extensions_settings')?.closest('.drawer-content')
+        || q('.drawer-content.openDrawer')
+        || q('.drawer-content')
+        || document.documentElement;
+}
+
+function niSetTavernSurfaceProp(app, name, value) {
+    const next = String(value || '').trim();
+    if (next && next !== 'none') app.style.setProperty(name, next);
+}
+
+function niApplyTavernSurfaceTheme(cfg = {}) {
+    const app = q('#ni-app');
+    if (!app) return;
+    niClearTavernSurfaceInlineProps(app);
+    if (cfg.themeSurfaceFollowPreset === false) return;
+}
+
+function niApplyThemeWithSurface(cfg = {}) {
+    const app = q('#ni-app');
+    app?.classList.remove('ni-surface-tavern');
+    niApplyThemeSettings(cfg, niThemeTargets());
+    niApplyTavernSurfaceTheme(cfg);
+    app?.classList.toggle('ni-borderless', cfg.themeBorderless === true);
+}
+
+function niThemePresetOptions(cfg = extension_settings[EXT_NAME] || {}) {
+    const deleted = new Set(Array.isArray(cfg.themeDeletedPresetIds) ? cfg.themeDeletedPresetIds : []);
+    const builtins = NI_THEME_BUILTIN_PRESETS
+        .filter(item => !deleted.has(item.id))
+        .map(item => ({ value: item.id, name: item.name, builtin: item }));
+    const users = (Array.isArray(cfg.themeUserPresets) ? cfg.themeUserPresets : [])
+        .filter(item => item && item.id && !deleted.has(`user:${item.id}`))
+        .map(item => ({ value: `user:${item.id}`, name: item.name || '未命名' }));
+    return [...builtins, ...users, { value: 'custom', name: '自定义' }];
+}
+
+function niRenderThemePresetOptions(selected) {
+    const cfg = extension_settings[EXT_NAME] || {};
+    const select = q('#ni-theme-preset');
+    const options = niThemePresetOptions(cfg);
+    const nextSelected = options.some(item => item.value === selected) ? selected : (options[0]?.value || 'custom');
+    if (select) {
+        select.innerHTML = options.map(item => `<option value="${niEscAttr(item.value)}">${niEscHtml(item.name)}</option>`).join('');
+        select.value = nextSelected;
+    }
+    return nextSelected;
+}
+
+function niThemeBuiltinPreset(id) {
+    return NI_THEME_BUILTIN_PRESETS.find(item => item.id === id) || null;
+}
+
+function niThemeUserPreset(value, cfg = extension_settings[EXT_NAME] || {}) {
+    if (!value?.startsWith('user:')) return null;
+    const id = value.slice(5);
+    return (Array.isArray(cfg.themeUserPresets) ? cfg.themeUserPresets : []).find(item => item?.id === id) || null;
+}
+
+function niThemePresetColors(value, cfg = extension_settings[EXT_NAME] || {}) {
+    if (value === 'custom') {
+        return {
+            primary: niNormalizeHex(cfg.themePrimary, NI_THEME_DEFAULT.primary),
+            success: niNormalizeHex(cfg.themeSuccess, NI_THEME_DEFAULT.success),
+            pivot: niNormalizeHex(cfg.themePivot, NI_THEME_DEFAULT.pivot),
+            warning: niNormalizeHex(cfg.themeWarning, NI_THEME_DEFAULT.warning),
+            background: niNormalizeHex(cfg.themeBackground, NI_THEME_DEFAULT.background),
+            text: niNormalizeHex(cfg.themeText, NI_THEME_DEFAULT.text),
+        };
+    }
+    const user = niThemeUserPreset(value, cfg);
+    const source = user?.colors || niThemeBuiltinPreset(value)?.colors || NI_THEME_DEFAULT;
+    return {
+        primary: niNormalizeHex(source.primary, NI_THEME_DEFAULT.primary),
+        success: niNormalizeHex(source.success, NI_THEME_DEFAULT.success),
+        pivot: niNormalizeHex(source.pivot, NI_THEME_DEFAULT.pivot),
+        warning: niNormalizeHex(source.warning, NI_THEME_DEFAULT.warning),
+        background: niNormalizeHex(source.background, NI_THEME_DEFAULT.background),
+        text: niNormalizeHex(source.text, NI_THEME_DEFAULT.text),
+    };
+}
+
+function niThemeCurrentColors() {
+    return {
+        primary: niNormalizeHex(q('#ni-theme-primary')?.value, NI_THEME_DEFAULT.primary),
+        success: niNormalizeHex(q('#ni-theme-success')?.value, NI_THEME_DEFAULT.success),
+        pivot: niNormalizeHex(q('#ni-theme-pivot')?.value, NI_THEME_DEFAULT.pivot),
+        warning: niNormalizeHex(q('#ni-theme-warning')?.value, NI_THEME_DEFAULT.warning),
+        background: niNormalizeHex(q('#ni-theme-background')?.value, NI_THEME_DEFAULT.background),
+        text: niNormalizeHex(q('#ni-theme-text')?.value, NI_THEME_DEFAULT.text),
+    };
+}
+
+function niSyncThemeUI() {
+    const cfg = extension_settings[EXT_NAME] || {};
+    const preset = niRenderThemePresetOptions(cfg.themePreset || DEFAULT_SETTINGS.themePreset);
+    const colors = niThemePresetColors(preset, cfg);
+    ['primary', 'success', 'pivot', 'warning'].forEach(key => {
+        niSetThemeColorUI(key, colors[key]);
+    });
+    const surfaceFollow = cfg.themeSurfaceFollowPreset !== false;
+    niSetThemeColorUI('background', surfaceFollow ? colors.background : niNormalizeHex(cfg.themeBackground, NI_THEME_DEFAULT.background));
+    niSetThemeColorUI('text', surfaceFollow ? colors.text : niNormalizeHex(cfg.themeText, NI_THEME_DEFAULT.text));
+    niSetThemeSurfaceUI(surfaceFollow);
+    niSetThemeBorderlessUI(cfg.themeBorderless === true);
+}
+
+function niSetThemePreset(preset) {
+    const nextPreset = niRenderThemePresetOptions(preset);
+    const colors = niThemePresetColors(nextPreset);
+    sv('#ni-theme-preset', nextPreset);
+    ['primary', 'success', 'pivot', 'warning'].forEach(key => {
+        niSetThemeColorUI(key, colors[key]);
+    });
+    if (q('#ni-theme-surface-follow')?.checked !== false) {
+        niSetThemeColorUI('background', colors.background);
+        niSetThemeColorUI('text', colors.text);
+    }
+    niApplyThemeWithSurface(niReadThemeDraft());
+}
+
+function niSetThemeColorUI(key, value) {
+    const color = niNormalizeHex(value, NI_THEME_DEFAULT[key] || NI_THEME_DEFAULT.primary);
+    sv(`#ni-theme-${key}`, color);
+    const code = q(`#ni-theme-${key}-code`);
+    if (code) code.textContent = color;
+    const swatch = q(`#ni-theme-${key}-swatch`);
+    if (swatch) swatch.style.background = color;
+}
+
+function niReadThemeDraft() {
+    const preset = q('#ni-theme-preset')?.value || 'custom';
+    const surfaceFollow = q('#ni-theme-surface-follow')?.checked !== false;
+    const colors = niThemeCurrentColors();
+    return {
+        themePreset: preset,
+        themePrimary: colors.primary,
+        themeSuccess: colors.success,
+        themePivot: colors.pivot,
+        themeWarning: colors.warning,
+        themeSurfaceFollowPreset: surfaceFollow,
+        themeBorderless: q('#ni-theme-borderless')?.checked === true,
+        themeBackground: colors.background,
+        themeText: colors.text,
+    };
+}
+
+function niSetThemeColor(key, value) {
+    if (key === 'background' || key === 'text') {
+        niSetThemeSurfaceUI(false);
+        niSetThemeColorUI(key, value);
+        niApplyThemeWithSurface(niReadThemeDraft());
+        return;
+    }
+    sv('#ni-theme-preset', 'custom');
+    niSetThemeColorUI(key, value);
+    niApplyThemeWithSurface(niReadThemeDraft());
+}
+
+function niSetThemeSurfaceUI(follow) {
+    const checked = follow !== false;
+    const chk = q('#ni-theme-surface-follow');
+    const row = q('#ni-theme-surface-switch-row');
+    const state = q('#ni-theme-surface-state');
+    if (chk) chk.checked = checked;
+    row?.classList.toggle('ni-switch-off', !checked);
+    if (state) state.textContent = checked ? '开' : '关';
+    ['background', 'text'].forEach(key => {
+        const el = q(`#ni-theme-${key}`);
+        if (el) el.disabled = checked;
+    });
+}
+
+function niSetThemeSurfaceFollow(follow) {
+    niSetThemeSurfaceUI(follow);
+    if (follow !== false) {
+        const colors = niThemePresetColors(q('#ni-theme-preset')?.value || 'custom');
+        niSetThemeColorUI('background', colors.background);
+        niSetThemeColorUI('text', colors.text);
+    } else {
+        const cfg = extension_settings[EXT_NAME] || {};
+        niSetThemeColorUI('background', niNormalizeHex(cfg.themeBackground, NI_THEME_DEFAULT.background));
+        niSetThemeColorUI('text', niNormalizeHex(cfg.themeText, NI_THEME_DEFAULT.text));
+    }
+    niApplyThemeWithSurface(niReadThemeDraft());
+}
+
+function niSetThemeBorderlessUI(enabled) {
+    const checked = enabled === true;
+    const chk = q('#ni-theme-borderless');
+    const row = q('#ni-theme-borderless-row');
+    const state = q('#ni-theme-borderless-state');
+    if (chk) chk.checked = checked;
+    row?.classList.toggle('ni-switch-off', !checked);
+    if (state) state.textContent = checked ? '开' : '关';
+}
+
+function niSetThemeBorderless(enabled) {
+    niSetThemeBorderlessUI(enabled);
+    niApplyThemeWithSurface(niReadThemeDraft());
+}
+
+function niToggleThemePanel() {
+    const body = q('#ni-theme-body');
+    const icon = q('#ni-theme-chevron');
+    if (!body) return;
+    const isOpen = body.style.display !== 'none';
+    body.style.display = isOpen ? 'none' : '';
+    if (icon) icon.style.transform = isOpen ? '' : 'rotate(180deg)';
+}
+
+function niNewThemePreset() {
+    const cfg = extension_settings[EXT_NAME];
+    const name = prompt('主题名称：', '新主题');
+    if (!name) return;
+    const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    if (!Array.isArray(cfg.themeUserPresets)) cfg.themeUserPresets = [];
+    cfg.themeUserPresets.push({ id, name: name.trim() || '新主题', colors: niThemeCurrentColors() });
+    cfg.themePreset = `user:${id}`;
+    niRenderThemePresetOptions(cfg.themePreset);
+    niSaveThemePreset();
+}
+
+function niSaveThemePreset() {
+    const cfg = extension_settings[EXT_NAME];
+    const draft = niReadThemeDraft();
+    if (draft.themePreset?.startsWith('user:')) {
+        const user = niThemeUserPreset(draft.themePreset, cfg);
+        if (user) user.colors = niThemeCurrentColors();
+    }
+    cfg.themePreset = draft.themePreset;
+    cfg.themePrimary = draft.themePrimary;
+    cfg.themeSuccess = draft.themeSuccess;
+    cfg.themePivot = draft.themePivot;
+    cfg.themeWarning = draft.themeWarning;
+    cfg.themeSurfaceFollowPreset = draft.themeSurfaceFollowPreset;
+    cfg.themeBorderless = draft.themeBorderless;
+    cfg.themeBackground = draft.themeBackground;
+    cfg.themeText = draft.themeText;
+    niApplyCurrentTheme();
+    niSyncThemeUI();
+    saveSettingsDebounced();
+}
+
+function niDeleteThemePreset() {
+    const cfg = extension_settings[EXT_NAME];
+    const value = q('#ni-theme-preset')?.value || 'custom';
+    if (value === 'custom') return;
+    const option = niThemePresetOptions(cfg).find(item => item.value === value);
+    if (!option) return;
+    if (!confirm(`删除主题「${option.name}」？`)) return;
+    if (value.startsWith('user:')) {
+        const id = value.slice(5);
+        cfg.themeUserPresets = (Array.isArray(cfg.themeUserPresets) ? cfg.themeUserPresets : []).filter(item => item?.id !== id);
+    } else {
+        if (!Array.isArray(cfg.themeDeletedPresetIds)) cfg.themeDeletedPresetIds = [];
+        if (!cfg.themeDeletedPresetIds.includes(value)) cfg.themeDeletedPresetIds.push(value);
+    }
+    cfg.themePreset = niRenderThemePresetOptions('custom');
+    niSetThemePreset(cfg.themePreset);
+    niSaveThemePreset();
+}
+
+function niExportThemePreset() {
+    const value = q('#ni-theme-preset')?.value || 'custom';
+    const option = niThemePresetOptions().find(item => item.value === value);
+    const name = option?.name || '自定义';
+    const payload = {
+        type: 'novel-injector-theme-preset',
+        version: 1,
+        preset: {
+            name,
+            colors: niThemeCurrentColors(),
+            surfaceFollowPreset: q('#ni-theme-surface-follow')?.checked !== false,
+        },
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `novel-injector-theme-${name.replace(/[\\/:*?"<>|]+/g, '_')}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function niImportThemePresetFile(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+        try {
+            const raw = JSON.parse(String(reader.result || '{}'));
+            const preset = raw.preset || raw;
+            const colors = preset.colors || preset;
+            const name = String(preset.name || raw.name || file.name.replace(/\.json$/i, '') || '导入主题').trim();
+            const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+            const cfg = extension_settings[EXT_NAME];
+            if (!Array.isArray(cfg.themeUserPresets)) cfg.themeUserPresets = [];
+            cfg.themeUserPresets.push({ id, name, colors: {
+                primary: niNormalizeHex(colors.primary, NI_THEME_DEFAULT.primary),
+                success: niNormalizeHex(colors.success, NI_THEME_DEFAULT.success),
+                pivot: niNormalizeHex(colors.pivot, NI_THEME_DEFAULT.pivot),
+                warning: niNormalizeHex(colors.warning, NI_THEME_DEFAULT.warning),
+                background: niNormalizeHex(colors.background, NI_THEME_DEFAULT.background),
+                text: niNormalizeHex(colors.text, NI_THEME_DEFAULT.text),
+            } });
+            cfg.themePreset = `user:${id}`;
+            cfg.themeSurfaceFollowPreset = preset.surfaceFollowPreset !== false;
+            niSyncThemeUI();
+            niSaveThemePreset();
+        } catch (e) {
+            toastr?.error(`导入失败：${e.message}`);
+        }
+    };
+    reader.readAsText(file);
+}
+
+// ============================================================
 // 设置 Tab — 插件总开关
 // ============================================================
 function niSyncPluginToggleUI() {
@@ -5622,7 +5994,10 @@ function niRenderNovelLibrary() {
         return;
     }
     const SPINE_COLORS = [
-        '#A85F70', '#5F879A', '#5F8A7C', '#A1845C', '#827496',
+        'var(--ni-primary, #A0445E)',
+        'var(--ni-success, #1D9E75)',
+        'var(--ni-pivot, #D68AC2)',
+        'var(--ni-warning, #C05A62)',
     ];
     const colorForName = (name) => {
         let h = 0;
@@ -6298,7 +6673,7 @@ jQuery(async () => {
 .ni-book-card-name-row{display:flex;align-items:center;justify-content:space-between;gap:4px;margin-bottom:6px}
 .ni-book-card-name{font-size:12px;font-weight:500;color:var(--color-text-primary);line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;margin-bottom:0}
 .ni-book-card-footer{display:flex;align-items:center;justify-content:flex-end;padding-top:3px;border-top:none;margin-top:auto}
-.ni-book-card-pill{font-size:10px;padding:2px 5px;border-radius:999px;background:rgba(160,68,94,.12);color:#A0445E;font-weight:500;white-space:nowrap;flex-shrink:0}
+.ni-book-card-pill{font-size:10px;padding:2px 5px;border-radius:999px;background:var(--ni-primary-alpha-12, rgba(160,68,94,.12));color:var(--ni-primary, #A0445E);font-weight:500;white-space:nowrap;flex-shrink:0}
 .ni-book-card-acts{display:flex;gap:2px}
 .ni-book-card-btn{width:22px;height:22px;border-radius:4px;border:none;background:transparent;color:var(--color-text-tertiary);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:12px;transition:background .12s,color .12s}
 .ni-book-card-btn:hover{background:var(--color-background-primary);color:var(--color-text-secondary)}
@@ -6311,18 +6686,18 @@ jQuery(async () => {
         let ws = document.getElementById('ni-world-override-style');
         if (!ws) { ws = document.createElement('style'); ws.id = 'ni-world-override-style'; document.head.appendChild(ws); }
         ws.textContent = `
-#ni-world-card{border:none!important;box-shadow:none!important}
+#ni-world-card{border:.5px solid var(--color-border-tertiary)!important;box-shadow:none!important;padding:8px 13px!important}
 .ni-world-add-cat{margin-top:10px!important;width:100%!important;background:none!important;border:none!important;box-shadow:none!important;border-radius:0!important;padding:6px 0!important;cursor:pointer!important;color:var(--color-text-tertiary)!important;font-size:11px!important;display:inline-flex!important;align-items:center!important;justify-content:flex-start!important;gap:4px!important;min-height:unset!important;height:auto!important;margin-left:0!important;text-transform:none!important}
-.ni-world-add-cat:hover{color:#A0445E!important;background:none!important}
+.ni-world-add-cat:hover{color:var(--ni-primary, #A0445E)!important;background:none!important}
 .ni-world-gen-row{margin-bottom:8px!important;display:flex!important;justify-content:flex-end!important}
-.ni-world-gen-all-btn{display:inline-flex!important;align-items:center!important;gap:4px!important;font-size:11px!important;font-weight:500!important;color:#B8336A!important;border:0.5px solid #f4c0d1!important;border-radius:4px!important;padding:2px 8px!important;background:transparent!important;cursor:pointer!important;white-space:nowrap!important;width:auto!important;min-height:unset!important;height:auto!important;margin:0!important;box-shadow:none!important;text-transform:none!important;letter-spacing:0!important}
-.ni-world-gen-all-btn:hover{background:#fbeaf0!important}
+.ni-world-gen-all-btn{display:inline-flex!important;align-items:center!important;gap:4px!important;font-size:11px!important;font-weight:500!important;color:var(--ni-primary-focus, #B8336A)!important;border:0.5px solid var(--ni-primary-border-strong, #f4c0d1)!important;border-radius:4px!important;padding:2px 8px!important;background:transparent!important;cursor:pointer!important;white-space:nowrap!important;width:auto!important;min-height:unset!important;height:auto!important;margin:0!important;box-shadow:none!important;text-transform:none!important;letter-spacing:0!important}
+.ni-world-gen-all-btn:hover{background:var(--ni-primary-soft-2, #fbeaf0)!important}
 .ni-world-gen-all-btn i{font-size:12px!important}
 .ni-world-regen,.ni-world-edit{background:none!important;border:none!important;box-shadow:none!important;border-radius:3px!important;padding:2px 5px!important;cursor:pointer!important;color:var(--color-text-tertiary)!important;font-size:11px!important;display:inline-flex!important;align-items:center!important;gap:3px!important;white-space:nowrap!important;width:auto!important;min-height:unset!important;height:auto!important;margin:0!important;font-weight:400!important;text-transform:none!important}
-.ni-world-regen:hover,.ni-world-edit:hover{color:#A0445E!important;background:none!important}
+.ni-world-regen:hover,.ni-world-edit:hover{color:var(--ni-primary, #A0445E)!important;background:none!important}
 .ni-world-regen:disabled{opacity:.4!important;pointer-events:none!important}
 .ni-world-toggle{background:none!important;border:none!important;box-shadow:none!important;border-radius:3px!important;padding:2px 4px!important;cursor:pointer!important;color:var(--color-text-tertiary)!important;font-size:13px!important;line-height:1!important;display:inline-flex!important;align-items:center!important;flex-shrink:0!important;opacity:0.5!important;width:auto!important;min-height:unset!important;height:auto!important;margin:0!important}
-.ni-world-toggle.on{color:#A0445E!important;opacity:1!important}
+.ni-world-toggle.on{color:var(--ni-primary, #A0445E)!important;opacity:1!important}
 .ni-world-toggle:hover{opacity:1!important}
         `;
     }
@@ -7062,6 +7437,30 @@ jQuery(async () => {
     // 插件总开关
     $app.on('change', '#ni-plugin-chk', () => niTogglePlugin());
 
+    // 外观配色
+    $app.on('click', '#ni-theme-toggle-head', () => niToggleThemePanel());
+    $app.on('change', '#ni-theme-preset', function() {
+        niSetThemePreset(this.value);
+    });
+    $app.on('input change', '.ni-theme-color-input', function() {
+        niSetThemeColor(this.dataset.themeColor, this.value);
+    });
+    $app.on('change', '#ni-theme-surface-follow', function() {
+        niSetThemeSurfaceFollow(this.checked);
+    });
+    $app.on('change', '#ni-theme-borderless', function() {
+        niSetThemeBorderless(this.checked);
+    });
+    $app.on('click', '#ni-theme-import', () => q('#ni-theme-import-file')?.click());
+    $app.on('change', '#ni-theme-import-file', function() {
+        niImportThemePresetFile(this.files?.[0]);
+        this.value = '';
+    });
+    $app.on('click', '#ni-theme-export', () => niExportThemePreset());
+    $app.on('click', '#ni-theme-delete', () => niDeleteThemePreset());
+    $app.on('click', '#ni-theme-new', () => niNewThemePreset());
+    $app.on('click', '#ni-theme-save', () => niSaveThemePreset());
+
     // 全局提示词面板
     $app.on('click', '#ni-global-prompt-btn', () => niToggleGlobalPrompt());
     $app.on('input', '#ni-global-pt-content', () => {
@@ -7389,7 +7788,7 @@ function niRenderUnassigned(assignedMap, allNodes) {
     nodesDiv.style.display = window._unassignedOpen ? 'block' : 'none';
     nodesDiv.innerHTML = unassigned.map(({ plot, ci, chunkIdx, isPivot }) =>
         `<div class="ni-unassigned-row">
-          <div class="ni-sp-check" style="border-color:rgba(160, 68, 94, .3)"></div>
+          <div class="ni-sp-check" style="border-color:var(--ni-primary-alpha-30, rgba(160, 68, 94, .3))"></div>
           <div class="ni-sp-node-info">
             <span class="ni-sp-node-title">${niEscHtml(plot.title)} <span style="font-size:10px;color:#BA7517">→ 请分配到某阶段</span></span>
             <span class="ni-sp-node-meta">第 ${(chunkIdx ?? ci)+1} 段${plot.time ? ' · '+niEscHtml(plot.time) : ''}</span>
@@ -7405,7 +7804,7 @@ function niSlotRename(sid, val) {
 window.niSlotRename = niSlotRename;
 
 function niSlotColor(idx) {
-    const colors = ['#E91E8C','#1D9E75','#378ADD','#BA7517','#7F77DD','#D85A30','#639922'];
+    const colors = ['#E91E8C','var(--ni-success, #1D9E75)','#378ADD','#BA7517','#7F77DD','#D85A30','var(--ni-success-text, #639922)'];
     return colors[(idx - 1) % colors.length];
 }
 
@@ -7423,7 +7822,7 @@ function niUpdateSpHint() {
         hint.style.color = 'var(--color-text-warning, #BA7517)';
     } else {
         hint.textContent = `✓ 全部 ${mainTotal} 个节点已分配`;
-        hint.style.color = 'var(--color-text-success, #1D9E75)';
+        hint.style.color = 'var(--color-text-success, var(--ni-success, #1D9E75))';
     }
 }
 
@@ -8187,7 +8586,7 @@ function niTbBuildNodePanelHtml(nodes, curIdx) {
       <div class="ni-tb-np-list${sOp.done ? ' vis' : ''}" id="ni-tb-sec-list-done">
         ${doneNodes.map((n, i) => mkRow(n, i, 'done-row', 'done')).join('')}
       </div>
-      <div class="ni-tb-section-hd" data-sec="active" style="background:rgba(208,100,110,.03)">
+      <div class="ni-tb-section-hd" data-sec="active" style="background:var(--ni-warning-alpha-03, rgba(208,100,110,.03))">
         <i class="ti ti-chevron-right ni-tb-section-icon open" id="ni-tb-sec-icon-active"></i>
         <span class="ni-tb-section-label" style="color:var(--color-text-primary);font-weight:500">进行中</span>
         <span class="ni-tb-section-count done-count">当前</span>
@@ -8456,7 +8855,7 @@ function niTbShowStageDone(stageIdx) {
     const badge = document.createElement('div');
     badge.id        = 'ni-tb-stage-done-badge';
     badge.className = 'ni-tb-stage-done-badge';
-    badge.innerHTML = `<i class="ti ti-circle-check" style="color:#c05a62"></i> 「${niEsc(st ? st.title : `第 ${stageIdx} 阶段`)}」本阶段已全部完成`;
+    badge.innerHTML = `<i class="ti ti-circle-check" style="color:var(--ni-warning, #c05a62)"></i> 「${niEsc(st ? st.title : `第 ${stageIdx} 阶段`)}」本阶段已全部完成`;
     track.parentElement.insertAdjacentElement('afterend', badge);
 }
 
@@ -8646,7 +9045,7 @@ function niTbInjectCSS() {
 .ni-tb-bar{display:flex;align-items:center;gap:6px;padding:9px 14px;cursor:pointer;background:var(--color-background-primary,#fff);border-bottom:0.5px solid transparent;transition:border-color .25s}
 .ni-tb-bar.open{border-bottom-color:var(--color-border-tertiary,#e8e8ec)}
 .ni-tb-pin{width:6px;height:6px;border-radius:50%;background:#e8848a;flex-shrink:0}
-.ni-tb-status{font-size:10px;font-weight:500;padding:1px 6px;border-radius:20px;background:#fde8ea;color:#c05a62;flex-shrink:0;white-space:nowrap}
+.ni-tb-status{font-size:10px;font-weight:500;padding:1px 6px;border-radius:20px;background:var(--ni-warning-soft, #fde8ea);color:var(--ni-warning, #c05a62);flex-shrink:0;white-space:nowrap}
 .ni-tb-curtitle{font-size:13px;font-weight:500;color:var(--color-text-primary,#1a1a1a);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ni-tb-meta{font-size:10px;color:var(--color-text-tertiary,#9a9aaa);white-space:nowrap;flex-shrink:0}
 .ni-tb-chevron{font-size:14px;color:var(--color-text-tertiary,#9a9aaa);transition:transform .35s cubic-bezier(.34,1.56,.64,1);margin-left:2px;flex-shrink:0}
@@ -8661,18 +9060,18 @@ function niTbInjectCSS() {
 .ni-tb-btn-free{display:flex;align-items:center;gap:4px;padding:5px 11px;border-radius:20px;border:0.5px solid var(--color-border-secondary,#d8d8de);background:var(--color-background-secondary,#f7f7f8);font-size:11px;color:var(--color-text-secondary,#5a5a6a);cursor:pointer;transition:all .2s;white-space:nowrap;flex-shrink:0}
 .ni-tb-btn-free:hover:not(.loading){background:var(--color-background-tertiary,#eeeeef)}
 .ni-tb-btn-free.loading{opacity:.6;pointer-events:none}
-.ni-tb-btn-free.has-result{border-color:rgba(208,100,110,.3);background:rgba(208,100,110,.06);color:#c05a62}
-.ni-tb-btn-free.has-result:hover{background:rgba(208,100,110,.12)}
-.ni-tb-btn-pause{display:flex;align-items:center;gap:4px;padding:5px 11px;border-radius:20px;border:0.5px solid rgba(208,100,110,.25);background:rgba(208,100,110,.06);font-size:11px;color:#c05a62;cursor:pointer;transition:background .15s;white-space:nowrap;flex-shrink:0}
-.ni-tb-btn-pause:hover{background:rgba(208,100,110,.12)}
-.ni-tb-btn-pause.paused{background:rgba(208,100,110,.14);border-color:rgba(208,100,110,.4)}
+.ni-tb-btn-free.has-result{border-color:var(--ni-warning-alpha-30, rgba(208,100,110,.3));background:var(--ni-warning-alpha-06, rgba(208,100,110,.06));color:var(--ni-warning, #c05a62)}
+.ni-tb-btn-free.has-result:hover{background:var(--ni-warning-alpha-12, rgba(208,100,110,.12))}
+.ni-tb-btn-pause{display:flex;align-items:center;gap:4px;padding:5px 11px;border-radius:20px;border:0.5px solid var(--ni-warning-alpha-25, rgba(208,100,110,.25));background:var(--ni-warning-alpha-06, rgba(208,100,110,.06));font-size:11px;color:var(--ni-warning, #c05a62);cursor:pointer;transition:background .15s;white-space:nowrap;flex-shrink:0}
+.ni-tb-btn-pause:hover{background:var(--ni-warning-alpha-12, rgba(208,100,110,.12))}
+.ni-tb-btn-pause.paused{background:var(--ni-warning-alpha-14, rgba(208,100,110,.14));border-color:var(--ni-warning-alpha-40, rgba(208,100,110,.4))}
 .ni-tb-drop-panel{display:none;background:var(--color-background-primary,#fff);border-top:0.5px solid var(--color-border-tertiary,#e8e8ec)}
 .ni-tb-drop-panel.vis{display:block}
 .ni-tb-sp-label{font-size:10px;color:var(--color-text-tertiary,#9a9aaa);letter-spacing:.06em;padding:8px 16px 4px;display:block}
 .ni-tb-sp-list{display:flex;flex-direction:column;padding-bottom:6px}
 .ni-tb-sp-row{display:flex;align-items:center;gap:8px;padding:7px 16px;cursor:pointer;transition:background .15s}
 .ni-tb-sp-row:hover{background:var(--color-background-secondary,#f7f7f8)}
-.ni-tb-sp-row.active-stage .ni-tb-sp-name{color:#c05a62;font-weight:500}
+.ni-tb-sp-row.active-stage .ni-tb-sp-name{color:var(--ni-warning, #c05a62);font-weight:500}
 .ni-tb-sp-row.active-stage .ni-tb-sp-dot{background:#e8848a}
 .ni-tb-sp-dot{width:5px;height:5px;border-radius:50%;background:var(--color-border-secondary,#d8d8de);flex-shrink:0}
 .ni-tb-sp-name{font-size:12px;color:var(--color-text-secondary,#5a5a6a)}
@@ -8682,12 +9081,12 @@ function niTbInjectCSS() {
 .ni-tb-section-icon.open{transform:rotate(90deg)}
 .ni-tb-section-label{font-size:11px;font-weight:500;color:var(--color-text-secondary,#5a5a6a);flex:1}
 .ni-tb-section-count{font-size:10px;color:var(--color-text-tertiary,#9a9aaa);background:var(--color-background-secondary,#f7f7f8);padding:1px 7px;border-radius:20px;border:0.5px solid var(--color-border-tertiary,#e8e8ec)}
-.ni-tb-section-count.done-count{background:#fde8ea;color:#c05a62;border-color:rgba(208,100,110,.2)}
+.ni-tb-section-count.done-count{background:var(--ni-warning-soft, #fde8ea);color:var(--ni-warning, #c05a62);border-color:var(--ni-warning-alpha-20, rgba(208,100,110,.2))}
 .ni-tb-np-list{display:none;flex-direction:column;padding:4px 0}
 .ni-tb-np-list.vis{display:flex}
 .ni-tb-np-row{display:flex;align-items:center;gap:10px;padding:7px 16px 7px 32px;cursor:pointer;transition:background .15s}
 .ni-tb-np-row:hover{background:var(--color-background-secondary,#f7f7f8)}
-.ni-tb-np-row.active{background:#fff5f6}
+.ni-tb-np-row.active{background:var(--ni-warning-soft-2, #fff5f6)}
 .ni-tb-np-dot{width:5px;height:5px;border-radius:50%;flex-shrink:0}
 .ni-tb-np-dot.done{background:#e8848a}
 .ni-tb-np-dot.active-dot{background:#e8848a;box-shadow:0 0 0 3px rgba(232,132,138,.2)}
@@ -8696,19 +9095,19 @@ function niTbInjectCSS() {
 .ni-tb-np-row.active .ni-tb-np-title{color:var(--color-text-primary,#1a1a1a);font-weight:500}
 .ni-tb-np-row.done-row .ni-tb-np-title{text-decoration:line-through;opacity:.45}
 .ni-tb-np-type{font-size:9px;padding:1px 5px;border-radius:8px;flex-shrink:0}
-.ni-tb-np-type.main{background:#F5E6EC;color:#8B3A50}
-.ni-tb-np-type.sub{background:#E1F5EE;color:#0F6E56}
-.ni-tb-np-type.pivot{background:#FAECE7;color:#5A2233}
+.ni-tb-np-type.main{background:var(--ni-primary-soft, #F5E6EC);color:var(--ni-primary-soft-text, #8B3A50)}
+.ni-tb-np-type.sub{background:var(--ni-success-soft, #E1F5EE);color:var(--ni-success-text, #0F6E56)}
+.ni-tb-np-type.pivot{background:var(--ni-pivot-soft, #FCF7FB);color:var(--ni-pivot-text, #7C5071)}
 .ni-tb-carousel-wrap{padding:14px 0;background:var(--color-background-primary,#fff);border-top:0.5px solid var(--color-border-tertiary,#e8e8ec);position:relative;overflow:hidden;height:200px}
 .ni-tb-track{position:absolute;top:0;left:0;height:100%;width:100%}
 .ni-tb-scard{position:absolute;top:14px;height:160px;border-radius:12px;border:0.5px solid var(--color-border-tertiary,#e8e8ec);background:var(--color-background-primary,#fff);padding:13px 14px;overflow:hidden;cursor:pointer;transition:left .4s cubic-bezier(.4,0,.2,1),width .4s cubic-bezier(.4,0,.2,1),opacity .4s ease,box-shadow .3s,border-color .3s,background .3s}
-.ni-tb-scard.active{border-color:rgba(208,100,110,.35);background:#fff9f9;box-shadow:0 6px 24px rgba(208,100,110,.14);z-index:2;cursor:default;padding-top:3px;padding-bottom:3px;height:auto;min-height:166px}
+.ni-tb-scard.active{border-color:var(--ni-warning-alpha-35, rgba(208,100,110,.35));background:var(--ni-warning-soft-2, #fff9f9);box-shadow:0 6px 24px var(--ni-warning-alpha-14, rgba(208,100,110,.14));z-index:2;cursor:default;padding-top:3px;padding-bottom:3px;height:auto;min-height:166px}
 .ni-tb-scard.side-prev,.ni-tb-scard.side-next{opacity:.52;background:var(--color-background-secondary,#f7f7f8);z-index:1}
 .ni-tb-scard.far{opacity:.15;background:var(--color-background-secondary,#f7f7f8);z-index:0;pointer-events:none}
 .ni-tb-scard-overlay{display:none;position:absolute;inset:0;border-radius:12px;cursor:pointer;background:rgba(248,235,237,.72);flex-direction:column;align-items:center;justify-content:center;gap:4px;transition:background .2s}
 .ni-tb-scard.done .ni-tb-scard-overlay{display:flex}
 .ni-tb-scard-overlay:hover{background:rgba(242,218,220,.9)}
-.ni-tb-done-badge{font-size:10px;font-weight:500;color:#c05a62;background:#fde8ea;padding:3px 10px;border-radius:20px;border:0.5px solid rgba(208,100,110,.3);pointer-events:none;transition:opacity .2s}
+.ni-tb-done-badge{font-size:10px;font-weight:500;color:var(--ni-warning, #c05a62);background:var(--ni-warning-soft, #fde8ea);padding:3px 10px;border-radius:20px;border:0.5px solid var(--ni-warning-alpha-30, rgba(208,100,110,.3));pointer-events:none;transition:opacity .2s}
 .ni-tb-unarchive-hint{font-size:9px;color:rgba(192,90,98,.65);opacity:0;transition:opacity .2s;pointer-events:none}
 .ni-tb-scard-overlay:hover .ni-tb-done-badge{opacity:.5}
 .ni-tb-scard-overlay:hover .ni-tb-unarchive-hint{opacity:1}
@@ -8717,16 +9116,16 @@ ni_query{display:none!important}
 .ni-tb-scard:not(.active) .ni-tb-scard-overlay:hover{background:rgba(248,235,237,.72)}
 .ni-tb-sc-num{font-size:10px;color:var(--color-text-tertiary,#9a9aaa);margin-bottom:3px}
 .ni-tb-sc-type{display:inline-block;font-size:9px;font-weight:500;padding:1px 6px;border-radius:10px;margin-bottom:8px}
-.ni-tb-sc-type.main{background:#F5E6EC;color:#8B3A50}
-.ni-tb-sc-type.sub{background:#E1F5EE;color:#0F6E56}
-.ni-tb-sc-type.pivot{background:#FAECE7;color:#5A2233}
+.ni-tb-sc-type.main{background:var(--ni-primary-soft, #F5E6EC);color:var(--ni-primary-soft-text, #8B3A50)}
+.ni-tb-sc-type.sub{background:var(--ni-success-soft, #E1F5EE);color:var(--ni-success-text, #0F6E56)}
+.ni-tb-sc-type.pivot{background:var(--ni-pivot-soft, #FCF7FB);color:var(--ni-pivot-text, #7C5071)}
 .ni-tb-sc-title{font-size:12px;font-weight:500;color:var(--color-text-primary,#1a1a1a);line-height:1.4;margin-bottom:5px}
-.ni-tb-sc-desc{font-size:10px;color:var(--color-text-secondary,#5a5a6a);line-height:1.4;overflow:hidden}.ni-tb-sc-extras{display:flex;flex-direction:column;gap:1px;margin-top:3px;overflow:hidden}.ni-tb-sc-event,.ni-tb-sc-fore{display:flex;align-items:center;gap:2px;font-size:10px;line-height:1.35;color:var(--color-text-tertiary,#9a9aaa);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ni-tb-sc-event i{font-size:9px;color:rgba(208,100,110,.5);flex-shrink:0}.ni-tb-sc-fore i{font-size:9px;color:rgba(120,100,200,.5);flex-shrink:0}
+.ni-tb-sc-desc{font-size:10px;color:var(--color-text-secondary,#5a5a6a);line-height:1.4;overflow:hidden}.ni-tb-sc-extras{display:flex;flex-direction:column;gap:1px;margin-top:3px;overflow:hidden}.ni-tb-sc-event,.ni-tb-sc-fore{display:flex;align-items:center;gap:2px;font-size:10px;line-height:1.35;color:var(--color-text-tertiary,#9a9aaa);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ni-tb-sc-event i{font-size:9px;color:var(--ni-warning-alpha-50, rgba(208,100,110,.5));flex-shrink:0}.ni-tb-sc-fore i{font-size:9px;color:rgba(120,100,200,.5);flex-shrink:0}
 .ni-tb-sc-check{position:absolute;top:10px;right:10px;width:15px;height:15px;border-radius:50%;border:0.5px solid rgba(160,68,94,.3);background:var(--color-background-secondary,#f7f7f8);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .2s;z-index:3}
-.ni-tb-sc-check.checked{background:#fde8ea;border-color:rgba(208,100,110,.5)}
+.ni-tb-sc-check.checked{background:var(--ni-warning-soft, #fde8ea);border-color:var(--ni-warning-alpha-50, rgba(208,100,110,.5))}
 .ni-tb-sc-check i{font-size:9px;color:transparent;transition:color .2s}
-.ni-tb-sc-check.checked i{color:#c05a62}
-.ni-tb-stage-done-badge{display:flex;align-items:center;justify-content:center;gap:5px;padding:10px 16px;font-size:11px;color:#c05a62;background:#fff5f6;border-top:0.5px solid rgba(208,100,110,.15)}
+.ni-tb-sc-check.checked i{color:var(--ni-warning, #c05a62)}
+.ni-tb-stage-done-badge{display:flex;align-items:center;justify-content:center;gap:5px;padding:10px 16px;font-size:11px;color:var(--ni-warning, #c05a62);background:var(--ni-warning-soft-2, #fff5f6);border-top:0.5px solid var(--ni-warning-alpha-15, rgba(208,100,110,.15))}
 .ni-tb-infer-block{display:none;flex-direction:column;background:var(--color-background-primary,#fff);border-top:0.5px solid var(--color-border-tertiary,#e8e8ec)}
 .ni-tb-infer-block.vis{display:flex}
 .ni-tb-infer-toggle{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;cursor:pointer;transition:background .15s;border-bottom:0.5px solid transparent}
@@ -8745,7 +9144,7 @@ ni_query{display:none!important}
 .ni-tb-infer-tag{display:inline-block;font-size:9px;font-weight:500;padding:1px 7px;border-radius:10px;margin-bottom:5px}
 .ni-tb-tag-canon{background:#eef5ff;color:#185fa5}
 .ni-tb-tag-diverge{background:#fff8e6;color:#854f0b}
-.ni-tb-tag-break{background:#fde8ea;color:#c05a62}
+.ni-tb-tag-break{background:var(--ni-warning-soft, #fde8ea);color:var(--ni-warning, #c05a62)}
 .ni-tb-infer-title{font-size:12px;font-weight:500;color:var(--color-text-primary,#1a1a1a);margin-bottom:4px;line-height:1.4}
 .ni-tb-infer-desc{font-size:11px;color:var(--color-text-secondary,#5a5a6a);line-height:1.6}
 .ni-tb-icon-only{padding:5px 10px !important;min-width:32px;justify-content:center}
@@ -9900,7 +10299,7 @@ console.log('[NI-TB] 穿书模式模块已加载');
 #ni-fab-ring{position:fixed !important;border-radius:50%;border:2px solid rgba(180,155,245,.45);pointer-events:none;z-index:2147483646 !important;animation:ni-fabRing 2.8s ease-in-out infinite;display:none}
 @keyframes ni-fabRing{0%,100%{transform:scale(1);opacity:.6}50%{transform:scale(1.15);opacity:0}}
 #ni-popup-wrap{position:fixed !important;left:0 !important;top:0 !important;width:100vw !important;height:100vh !important;z-index:2147483645 !important;pointer-events:none;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}
-#ni-popup-overlay{position:absolute;inset:0;background:rgba(180,160,220,.18);backdrop-filter:blur(2px);cursor:pointer;display:none}
+#ni-popup-overlay{position:absolute;inset:0;background:var(--ni-popup-overlay-bg,rgba(180,160,220,.18));backdrop-filter:var(--ni-popup-backdrop-filter,blur(2px));cursor:pointer;display:none}
 .ni-popup-panel{pointer-events:auto;transform-origin:center center;transform:scale(0.88);opacity:0;transition:transform .36s cubic-bezier(.34,1.25,.64,1),opacity .26s ease;filter:drop-shadow(0 8px 32px rgba(160,120,200,.28));width:320px;max-height:calc(100vh - 32px);display:none;flex-direction:column;border-radius:6px;overflow:visible;padding-bottom:24px}
 .ni-popup-panel.vis{transform:scale(1);opacity:1}
 .ni-popup-panel .ni-rcp-body,.ni-popup-panel .ni-node-list{scrollbar-width:thin;scrollbar-color:#dbeeff #fff8fc}

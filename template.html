@@ -245,7 +245,7 @@
       </div>
 
       <!-- Injection Settings Card (accordion UI) -->
-      <div class="ni-card">
+      <div class="ni-card ni-inj-card">
         <div class="ni-ctitle ni-ctitle-toggle" id="ni-inj-toggle">
           <span class="ni-ctitle-label"><i class="ti ti-settings"></i>注入设置</span>
         </div>
@@ -865,6 +865,95 @@
         </div>
       </div>
 
+      <div class="ni-card" id="ni-theme-card">
+        <div class="ni-ctitle ni-ctitle-toggle" id="ni-theme-toggle-head" style="cursor:pointer;user-select:none;">
+          <span class="ni-ctitle-label"><i class="ti ti-palette"></i>外观配色</span>
+          <i class="ti ti-chevron-down" id="ni-theme-chevron" style="margin-left:auto;font-size:14px;color:var(--color-text-tertiary);transition:transform .2s;"></i>
+        </div>
+        <div id="ni-theme-body" style="display:none">
+          <div class="ni-field ni-theme-preset-row">
+            <label>主题</label>
+            <div class="ni-theme-preset-controls">
+              <select id="ni-theme-preset" class="ni-theme-select">
+                <option value="default">默认</option>
+                <option value="custom">自定义</option>
+              </select>
+              <button class="ni-theme-tool-btn" id="ni-theme-import" title="导入"><i class="ti ti-file-import"></i></button>
+              <button class="ni-theme-tool-btn" id="ni-theme-export" title="导出"><i class="ti ti-file-export"></i></button>
+              <button class="ni-theme-tool-btn" id="ni-theme-new" title="新建"><i class="ti ti-plus"></i></button>
+              <button class="ni-theme-tool-btn" id="ni-theme-delete" title="删除"><i class="ti ti-trash"></i></button>
+              <button class="ni-theme-tool-btn" id="ni-theme-save" title="保存"><i class="ti ti-device-floppy"></i></button>
+            </div>
+          </div>
+          <input type="file" id="ni-theme-import-file" accept=".json,application/json" style="display:none">
+          <div class="ni-theme-custom-row">
+            <label for="ni-theme-primary">主色</label>
+            <div class="ni-theme-color-wrap">
+              <input type="color" id="ni-theme-primary" class="ni-theme-color-input" data-theme-color="primary" value="#A0445E">
+              <span class="ni-theme-swatch" id="ni-theme-primary-swatch"></span>
+              <span class="ni-theme-code" id="ni-theme-primary-code">#A0445E</span>
+            </div>
+          </div>
+          <div class="ni-theme-custom-row">
+            <label for="ni-theme-success">次色</label>
+            <div class="ni-theme-color-wrap">
+              <input type="color" id="ni-theme-success" class="ni-theme-color-input" data-theme-color="success" value="#1D9E75">
+              <span class="ni-theme-swatch" id="ni-theme-success-swatch"></span>
+              <span class="ni-theme-code" id="ni-theme-success-code">#1D9E75</span>
+            </div>
+          </div>
+          <div class="ni-theme-custom-row">
+            <label for="ni-theme-pivot">强调</label>
+            <div class="ni-theme-color-wrap">
+              <input type="color" id="ni-theme-pivot" class="ni-theme-color-input" data-theme-color="pivot" value="#D68AC2">
+              <span class="ni-theme-swatch" id="ni-theme-pivot-swatch"></span>
+              <span class="ni-theme-code" id="ni-theme-pivot-code">#D68AC2</span>
+            </div>
+          </div>
+          <div class="ni-theme-custom-row">
+            <label for="ni-theme-warning">警示</label>
+            <div class="ni-theme-color-wrap">
+              <input type="color" id="ni-theme-warning" class="ni-theme-color-input" data-theme-color="warning" value="#C05A62">
+              <span class="ni-theme-swatch" id="ni-theme-warning-swatch"></span>
+              <span class="ni-theme-code" id="ni-theme-warning-code">#C05A62</span>
+            </div>
+          </div>
+          <div class="ni-theme-divider"></div>
+          <label class="ni-switch-row" id="ni-theme-surface-switch-row">
+            <span class="ni-switch-label">跟随美化</span>
+            <span class="ni-switch-wrap">
+              <input type="checkbox" id="ni-theme-surface-follow" style="position:absolute;opacity:0;width:0;height:0">
+              <span class="ni-switch-track"><span class="ni-switch-knob"></span></span>
+              <span class="ni-switch-txt" id="ni-theme-surface-state">开</span>
+            </span>
+          </label>
+          <label class="ni-switch-row" id="ni-theme-borderless-row">
+            <span class="ni-switch-label">去除边框</span>
+            <span class="ni-switch-wrap">
+              <input type="checkbox" id="ni-theme-borderless" style="position:absolute;opacity:0;width:0;height:0">
+              <span class="ni-switch-track"><span class="ni-switch-knob"></span></span>
+              <span class="ni-switch-txt" id="ni-theme-borderless-state">关</span>
+            </span>
+          </label>
+          <div class="ni-theme-custom-row">
+            <label for="ni-theme-background">背景</label>
+            <div class="ni-theme-color-wrap">
+              <input type="color" id="ni-theme-background" class="ni-theme-color-input" data-theme-color="background" value="#FFFDFA">
+              <span class="ni-theme-swatch" id="ni-theme-background-swatch"></span>
+              <span class="ni-theme-code" id="ni-theme-background-code">#FFFDFA</span>
+            </div>
+          </div>
+          <div class="ni-theme-custom-row">
+            <label for="ni-theme-text">文字</label>
+            <div class="ni-theme-color-wrap">
+              <input type="color" id="ni-theme-text" class="ni-theme-color-input" data-theme-color="text" value="#000000">
+              <span class="ni-theme-swatch" id="ni-theme-text-swatch"></span>
+              <span class="ni-theme-code" id="ni-theme-text-code">#000000</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- 3. 小说库 -->
       <div class="ni-card">
         <div class="ni-ctitle">
@@ -986,7 +1075,7 @@
 #ni-fab-ring{position:fixed;border-radius:50%;border:2px solid rgba(180,155,245,.45);pointer-events:none;z-index:9998;animation:ni-fabRing 2.8s ease-in-out infinite;display:none}
 @keyframes ni-fabRing{0%,100%{transform:scale(1);opacity:.6}50%{transform:scale(1.15);opacity:0}}
 #ni-popup-wrap{position:fixed !important;left:0 !important;top:0 !important;width:100vw !important;height:100vh !important;z-index:9997;pointer-events:none;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}
-#ni-popup-overlay{position:absolute;inset:0;background:rgba(180,160,220,.18);backdrop-filter:blur(2px);cursor:pointer;display:none}
+#ni-popup-overlay{position:absolute;inset:0;background:var(--ni-popup-overlay-bg,rgba(180,160,220,.18));backdrop-filter:var(--ni-popup-backdrop-filter,blur(2px));cursor:pointer;display:none}
 .ni-popup-panel{pointer-events:auto;transform-origin:center center;transform:scale(0.88);opacity:0;transition:transform .36s cubic-bezier(.34,1.25,.64,1),opacity .26s ease;filter:drop-shadow(0 8px 32px rgba(160,120,200,.28));width:320px;max-height:calc(100vh - 32px);display:none;flex-direction:column;border-radius:6px;overflow:visible;padding-bottom:24px}
 .ni-popup-panel.vis{transform:scale(1);opacity:1}
 .ni-rcp-body{flex:1;overflow-y:auto;min-height:0;scrollbar-width:thin;scrollbar-color:#dbeeff #fff8fc}
