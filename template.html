@@ -731,10 +731,12 @@
             <div style="display:flex;align-items:center;gap:16px">
               <label class="ni-toggle-label">
                 <input type="checkbox" id="ni-tb-display-statusbar">
+                <span class="ni-cfg-chk"><i class="ti ti-check"></i></span>
                 <span>状态栏</span>
               </label>
               <label class="ni-toggle-label">
                 <input type="checkbox" id="ni-tb-display-popup">
+                <span class="ni-cfg-chk"><i class="ti ti-check"></i></span>
                 <span>弹窗</span>
               </label>
             </div>
@@ -743,11 +745,11 @@
             <div style="display:flex;align-items:center;justify-content:space-between">
               <label style="display:flex;align-items:center;gap:5px">
                 <i class="ti ti-tag" style="font-size:12px"></i>归纳
-                <span style="font-size:10px;color:var(--color-text-secondary);font-weight:400">AI 每轮回复自动附加场景标签供语义召回</span>
+                <span style="font-size:10px;color:var(--color-text-secondary);font-weight:400">每轮附加召回标签</span>
               </label>
               <label class="ni-toggle-wrap">
                 <input type="checkbox" id="ni-tb-query-mode">
-                <span class="ni-toggle"></span>
+                <span class="ni-cfg-chk"><i class="ti ti-check"></i></span>
               </label>
             </div>
             <div style="font-size:11px;color:var(--color-text-secondary);margin-top:6px;line-height:1.6">
@@ -761,11 +763,11 @@
             <div style="display:flex;align-items:center;justify-content:space-between">
               <label style="display:flex;align-items:center;gap:5px">
                 <i class="ti ti-eye" style="font-size:12px"></i>沉浸
-                <span style="font-size:10px;color:var(--color-text-secondary);font-weight:400">限制 AI 只按 &lt;user&gt; 剧情内可知信息叙述</span>
+                <span style="font-size:10px;color:var(--color-text-secondary);font-weight:400">仅写 &lt;user&gt; 已知信息</span>
               </label>
               <label class="ni-toggle-wrap">
                 <input type="checkbox" id="ni-tb-immersion-mode">
-                <span class="ni-toggle"></span>
+                <span class="ni-cfg-chk"><i class="ti ti-check"></i></span>
               </label>
             </div>
             <div style="font-size:11px;color:var(--color-text-secondary);margin-top:6px;line-height:1.6">
@@ -954,9 +956,11 @@
 #ni-popup-overlay{position:absolute;inset:0;background:rgba(180,160,220,.18);backdrop-filter:blur(2px);cursor:pointer;display:none}
 .ni-popup-panel{pointer-events:auto;transform-origin:center center;transform:scale(0.88);opacity:0;transition:transform .36s cubic-bezier(.34,1.25,.64,1),opacity .26s ease;filter:drop-shadow(0 8px 32px rgba(160,120,200,.28));width:320px;max-height:calc(100vh - 32px);display:none;flex-direction:column;border-radius:6px;overflow:visible;padding-bottom:24px}
 .ni-popup-panel.vis{transform:scale(1);opacity:1}
-.ni-rcp-body{flex:1;overflow-y:auto;min-height:0}
-.ni-rcp-body::-webkit-scrollbar{width:3px}
-.ni-rcp-body::-webkit-scrollbar-thumb{background:linear-gradient(to bottom,#f5c6d8,#c8d8f5);border-radius:2px}
+.ni-rcp-body{flex:1;overflow-y:auto;min-height:0;scrollbar-width:thin;scrollbar-color:#dbeeff #fff8fc}
+.ni-rcp-body::-webkit-scrollbar{width:6px}
+.ni-rcp-body::-webkit-scrollbar-track{background:#fff8fc;border-left:1px dashed rgba(245,210,222,.5)}
+.ni-rcp-body::-webkit-scrollbar-thumb{background:linear-gradient(to bottom,#f8dbe6,#dbeeff);border-radius:6px;border:1px solid #fff8fc}
+.ni-rcp-body::-webkit-scrollbar-thumb:hover{background:linear-gradient(to bottom,#f2c7d8,#cfe2ff)}
 .ni-receipt{width:320px;background:#fffbfd;border-radius:6px 6px 0 0;box-shadow:0 0 0 1.5px #f0c4d4,4px 8px 28px rgba(200,100,130,.18);position:relative;overflow:visible}
 .ni-receipt-wings{position:absolute;top:-13px;left:0;right:0;display:flex;justify-content:center;pointer-events:none;z-index:10}
 .ni-wing-center{display:flex;align-items:center;opacity:0.8}
@@ -982,9 +986,11 @@
 .ni-stage-opt.active .ni-sdot{background:#e8748a;box-shadow:0 0 4px rgba(232,116,138,.5)}
 .ni-col-hd{display:flex;padding:5px 16px;font-size:9px;color:#d080a0;letter-spacing:.06em;border-bottom:1.5px solid #f5c6d8;background:linear-gradient(to right,#fff8fc,#f8f0ff,#fff8fc)}
 .ni-col-num{width:26px;flex-shrink:0}.ni-col-type{width:50px;flex-shrink:0}.ni-col-title{flex:1}.ni-col-status{width:32px;text-align:right;flex-shrink:0}
-.ni-node-list{height:200px;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
-.ni-node-list::-webkit-scrollbar{width:3px}
-.ni-node-list::-webkit-scrollbar-thumb{background:linear-gradient(to bottom,#f5c6d8,#c8d8f5);border-radius:2px}
+.ni-node-list{height:200px;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#dbeeff #fff8fc}
+.ni-node-list::-webkit-scrollbar{width:6px}
+.ni-node-list::-webkit-scrollbar-track{background:#fff8fc;border-left:1px dashed rgba(245,210,222,.5)}
+.ni-node-list::-webkit-scrollbar-thumb{background:linear-gradient(to bottom,#f8dbe6,#dbeeff);border-radius:6px;border:1px solid #fff8fc}
+.ni-node-list::-webkit-scrollbar-thumb:hover{background:linear-gradient(to bottom,#f2c7d8,#cfe2ff)}
 .ni-node-group{position:relative;border-bottom:1px dashed rgba(245,198,216,.5)}
 .ni-node-group::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:transparent;border-radius:0 2px 2px 0;pointer-events:none;z-index:1}
 .ni-node-group.is-active-g::before{background:linear-gradient(180deg,#e8748a,#b8c8f5,#a8d8f0)}
@@ -1003,7 +1009,7 @@
 .ni-nr-meta{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
 .ni-nr-meta-item{display:inline-flex;align-items:center;gap:2px;font-size:8px;color:#b08090;background:rgba(245,198,216,.2);border:1px solid rgba(245,198,216,.5);border-radius:6px;padding:1px 5px;line-height:1.4}
 .ni-nr-status{width:32px;text-align:right;flex-shrink:0;padding-top:1px}
-.ni-nr-chk{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;border:1.5px solid #f0a0b8;background:#fff;font-size:9px;color:transparent;cursor:pointer;transition:all .18s;pointer-events:none}
+.ni-nr-chk{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;border:1.5px solid rgba(160,68,94,.3);background:#fff;font-size:8px;color:transparent;cursor:pointer;transition:all .18s;pointer-events:none}
 .ni-node-row.is-active .ni-nr-chk{pointer-events:auto}
 .ni-nr-chk.checked{background:linear-gradient(135deg,#fde8f0,#f5c6d8);border-color:#c05a72;color:#c05a72}
 .ni-node-desc{display:none;padding:4px 10px 6px;font-size:9px;color:#a06878;line-height:1.6;background:linear-gradient(to right,#fff5f8,#f8f0ff)}
@@ -1031,7 +1037,7 @@
 .ni-infer-lbl{font-size:9px;color:#d080a0;letter-spacing:.06em}
 .ni-infer-items{display:none;flex-direction:column}
 .ni-infer-items.vis{display:flex}
-.ni-infer-item{display:flex;align-items:flex-start;gap:9px;padding:5px 16px;border-bottom:1px dashed rgba(245,198,216,.35)}
+.ni-infer-item{display:flex;align-items:flex-start;gap:9px;padding:5px 16px;border-bottom:1px dashed rgba(245,198,216,.35);cursor:pointer}
 .ni-infer-item:last-child{border-bottom:none}
 .ni-infer-idx{flex-shrink:0;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:8px;color:#d080a0;border:1.5px solid #f5c6d8;background:#fff8fc}
 .ni-infer-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
@@ -1109,7 +1115,7 @@
         </div>
         <div class="ni-infer-sec" id="ni-pop-infer-sec">
           <div class="ni-infer-tog" id="ni-pop-infer-tog">
-            <span class="ni-infer-lbl">✦ 后文推演走向，仅供参考</span>
+            <span class="ni-infer-lbl">✦ 下一步行动选项，点击填入输入框</span>
             <span id="ni-pop-infer-chev"></span>
           </div>
           <div class="ni-infer-items" id="ni-pop-infer-items"></div>

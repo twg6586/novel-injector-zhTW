@@ -71,7 +71,7 @@
   color: var(--color-text-primary);
 }
 .ni-field input:focus { outline: none; border-color: #B8336A; }
-.ni-field input[type="checkbox"] { width: auto; padding: 0; border: none; background: none; }
+.ni-field input[type="checkbox"] { width: 15px; height: 15px; padding: 0; border: none; background: none; accent-color: #A0445E; cursor: pointer; }
 
 /* ---- Buttons ---- */
 .ni-btn {
@@ -251,9 +251,48 @@
   user-select: none;
 }
 .ni-toggle-label input[type="checkbox"] {
-  accent-color: #B8336A;
-  width: 14px;
-  height: 14px;
+  accent-color: #A0445E;
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+#ni-tb-cfg-panel .ni-toggle-label input[type="checkbox"],
+#ni-tb-cfg-panel .ni-toggle-wrap input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+  pointer-events: none;
+}
+#ni-tb-cfg-panel .ni-cfg-chk {
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  border: .5px solid rgba(160, 68, 94, .3);
+  background: var(--color-background-primary);
+  flex-shrink: 0;
+  box-sizing: border-box;
+  transition: all .15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+#ni-tb-cfg-panel .ni-cfg-chk i {
+  font-size: 10px;
+  color: transparent;
+  transition: color .15s;
+}
+#ni-tb-cfg-panel input[type="checkbox"]:checked + .ni-cfg-chk {
+  background: #A0445E;
+  border-color: #A0445E;
+}
+#ni-tb-cfg-panel input[type="checkbox"]:checked + .ni-cfg-chk i {
+  color: #F5E6EC;
+}
+#ni-tb-cfg-panel .ni-toggle-wrap {
+  display: inline-flex;
+  align-items: center;
   cursor: pointer;
 }
 .ni-pt-wrap {
@@ -494,9 +533,9 @@
   grid-column: 1 / -1;
   width: auto;
 }
-.ni-stg-chk { width: 18px; height: 18px; border-radius: 4px; border: .5px solid var(--color-border-secondary); background: var(--color-background-primary); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all .15s; flex-shrink: 0; margin-top: 1px; }
+.ni-stg-chk { width: 15px; height: 15px; border-radius: 4px; border: .5px solid rgba(160, 68, 94, .3); background: var(--color-background-primary); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all .15s; flex-shrink: 0; margin-top: 1px; }
 .ni-stg-chk.on { background: #A0445E; border-color: #A0445E; }
-.ni-stg-chk i { font-size: 12px; color: transparent; transition: color .15s; }
+.ni-stg-chk i { font-size: 10px; color: transparent; transition: color .15s; }
 .ni-stg-chk.on i { color: #F5E6EC; }
 .ni-stage-meta { flex: 1; min-width: 0; }
 .ni-stage-title-row { display: flex; align-items: center; gap: 7px; margin-bottom: 0; flex-wrap: wrap; }
@@ -793,7 +832,7 @@
 
 .ni-sp-check {
   width: 15px; height: 15px;
-  border: 0.5px solid var(--color-border-secondary);
+  border: 0.5px solid rgba(160, 68, 94, .3);
   border-radius: 3px;
   flex-shrink: 0;
   margin-top: 1px;
@@ -801,8 +840,8 @@
   background: var(--color-background-primary);
 }
 .ni-sp-check.on {
-  background: #B8336A;
-  border-color: #B8336A;
+  background: #A0445E;
+  border-color: #A0445E;
 }
 
 .ni-sp-node-info { flex: 1; min-width: 0; }
@@ -960,12 +999,17 @@
   white-space: nowrap;
 }
 .ni-stream-check-wrap input[type="checkbox"] {
-  width: 13px;
-  height: 13px;
+  width: 15px;
+  height: 15px;
   margin: 0;
-  accent-color: #B8336A;
+  accent-color: #A0445E;
+  outline: 1px solid rgba(160, 68, 94, .3);
+  outline-offset: -1px;
   cursor: pointer;
   flex-shrink: 0;
+}
+.ni-stream-check-wrap input[type="checkbox"]:checked {
+  outline: none;
 }
 
 /* ── 向量化阶段选择器 ── */
@@ -989,7 +1033,8 @@
   user-select: none;
 }
 .ni-vec-stage-label:hover { background: var(--color-background-secondary); }
-.ni-vec-stage-label input[type="checkbox"] { accent-color: #B8336A; margin: 0; }
+.ni-vec-stage-label input[type="checkbox"] { width: 15px; height: 15px; accent-color: #A0445E; margin: 0; outline: 1px solid rgba(160, 68, 94, .3); outline-offset: -1px; }
+.ni-vec-stage-label input[type="checkbox"]:checked { outline: none; }
 .ni-vec-done-badge {
   font-size: 10px;
   padding: 1px 5px;
@@ -1173,7 +1218,8 @@ select.ni-modal-input {
   padding: 5px 11px; cursor: pointer; transition: background .1s;
 }
 .ni-drawer-item:hover { background: var(--color-background-secondary); }
-.ni-drawer-item input[type=checkbox] { width: 13px; height: 13px; flex-shrink: 0; cursor: pointer; accent-color: var(--color-primary,#B8336A); }
+.ni-drawer-item input[type=checkbox] { width: 15px; height: 15px; flex-shrink: 0; cursor: pointer; accent-color: var(--color-primary,#A0445E); outline: 1px solid rgba(160, 68, 94, .3); outline-offset: -1px; }
+.ni-drawer-item input[type=checkbox]:checked { outline: none; }
 .ni-drawer-item label { font-size: 12px; color: var(--SmartThemeBodyColor, var(--color-text-primary)); cursor: pointer; flex: 1; }
 .ni-drawer-item-empty { opacity: 0.45; }
 .ni-drawer-item-empty input[type=checkbox] { cursor: not-allowed; }
@@ -1228,14 +1274,14 @@ select.ni-modal-input {
 /* 左列：纯div开关，不用原生checkbox */
 .ni-char-card-left { display: flex; align-items: flex-start; justify-content: center; padding-top: 12px; flex-shrink: 0; width: 26px; }
 .ni-char-chk {
-  width: 18px; height: 18px; border-radius: 4px;
-  border: 1.5px solid #A0445E; background: transparent;
+  width: 15px; height: 15px; border-radius: 4px;
+  border: .5px solid rgba(160, 68, 94, .3); background: transparent;
   cursor: pointer; position: relative; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
   transition: background .15s;
 }
-.ni-char-chk-icon { font-size: 12px; color: transparent; line-height: 1; }
-.ni-char-chk.ni-char-chk-on { background: #A0445E; }
+.ni-char-chk-icon { font-size: 10px; color: transparent; line-height: 1; }
+.ni-char-chk.ni-char-chk-on { background: #A0445E; border-color: #A0445E; }
 .ni-char-chk.ni-char-chk-on .ni-char-chk-icon { color: #fff; }
 
 /* 中列：内容 */
@@ -1810,32 +1856,8 @@ select.ni-modal-input {
 /* 穿书模式勾选框自定义样式 */
 #ni-tb-display-statusbar,
 #ni-tb-display-popup {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 14px;
-  height: 14px;
-  border: 1.5px solid var(--color-border-secondary, #aaa);
-  border-radius: 3px;
-  background: var(--color-background, #fff);
+  width: 15px;
+  height: 15px;
   cursor: pointer;
   flex-shrink: 0;
-  position: relative;
-}
-#ni-tb-display-statusbar:checked,
-#ni-tb-display-popup:checked {
-  background: #B8336A;
-  border-color: #B8336A;
-}
-#ni-tb-display-statusbar:checked::after,
-#ni-tb-display-popup:checked::after {
-  content: '';
-  position: absolute;
-  left: 3px;
-  top: 0px;
-  width: 4px;
-  height: 8px;
-  border: 2px solid #fff;
-  border-top: none;
-  border-left: none;
-  transform: rotate(45deg);
 }

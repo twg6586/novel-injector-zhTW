@@ -766,31 +766,6 @@ function niLoadSettings() {
         if (saved[k] === undefined) saved[k] = DEFAULT_SETTINGS[k];
     });
 
-
-    // 旧版推演提示词迁移：若本地已保存旧模板或误替换模板，自动切换到新版默认模板
-    if (!saved.tbInferPromptV2Fixed) {
-        const _savedInferPrompt = String(saved.tbInferPrompt || '');
-        const _niHashText = (str) => {
-            let h = 2166136261;
-            for (const ch of String(str)) {
-                h ^= ch.codePointAt(0);
-                h = Math.imul(h, 16777619);
-            }
-            return h >>> 0;
-        };
-        const _legacyInferHashes = new Set([3455640691, 1580207913]);
-        const _looksLikePreV2InferPrompt =
-            _savedInferPrompt.includes('[穿书模式·后续推演指令]') &&
-            _savedInferPrompt.includes('{CUR_NODE_TITLE}') &&
-            _savedInferPrompt.includes('{RECENT_CHAT}') &&
-            !_savedInferPrompt.includes('后续剧情推演器');
-        if (!_savedInferPrompt || _legacyInferHashes.has(_niHashText(_savedInferPrompt)) || _looksLikePreV2InferPrompt) {
-            saved.tbInferPrompt = TB_DEFAULT_INFER_PROMPT;
-        }
-        saved.tbInferPromptV2Fixed = true;
-        if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
-    }
-
     // 还原轻量索引（重数据在 niLoadSettings 末尾从服务端异步拉取）
     if (saved._stageStates) S.stageStates = saved._stageStates;
     if (saved._stageSummaries) S.stageSummaries = saved._stageSummaries;
@@ -6934,7 +6909,7 @@ function niRenderUnassigned(assignedMap, allNodes) {
     nodesDiv.style.display = window._unassignedOpen ? 'block' : 'none';
     nodesDiv.innerHTML = unassigned.map(({ plot, ci, chunkIdx, isPivot }) =>
         `<div class="ni-unassigned-row">
-          <div class="ni-sp-check" style="border-color:var(--color-border-tertiary)"></div>
+          <div class="ni-sp-check" style="border-color:rgba(160, 68, 94, .3)"></div>
           <div class="ni-sp-node-info">
             <span class="ni-sp-node-title">${niEscHtml(plot.title)} <span style="font-size:10px;color:#BA7517">→ 请分配到某阶段</span></span>
             <span class="ni-sp-node-meta">第 ${(chunkIdx ?? ci)+1} 段${plot.time ? ' · '+niEscHtml(plot.time) : ''}</span>
@@ -7285,7 +7260,97 @@ const TB_DEFAULT_ADVANCE_PROMPT =
 
 [/穿书模式·当前叙事阶段]`;
 
-const TB_DEFAULT_INFER_PROMPT = `[/穿书模式·后续推演指令]你帮我替换一下，顺便检查会不会有残留，全部换为新版`;
+const TB_DEFAULT_INFER_PROMPT =
+`[穿书模式·后续推演指令]
+
+你现在是这部小说的后续剧情推演器。你的任务不是替 <user> 写正文，也不是替 <user> 做最终决定，而是生成三条可以被点击后直接作为下一轮输入使用的剧情推进指令。
+
+## 当前节点
+{CUR_NODE_TITLE}：{CUR_NODE_BODY}
+
+## 已知角色人设
+{CHAR_PROFILES}
+
+## 最近对话（最近 {MSG_COUNT} 条，时序从旧到新）
+{RECENT_CHAT}
+
+---
+
+## 你的任务
+基于以上真实的人物关系与当前对话走向，推演三条风格各异的下一步行动选项。
+
+要求：
+1. 必须紧贴上方角色人设——人物的反应、用词、行为要符合其既定性格，不得脱离设定。
+2. 必须从最近对话的情绪、信息差、矛盾与处境自然延伸，不得凭空引入无关事件。
+3. 三条方向情感基调须有明显差异，依次为：情感向、张力向、伏笔向。
+4. desc 必须写成“点击后可直接进入输入框的推进指令”，而不是剧情简介、旁白总结或作者视角分析。
+5. desc 应描述 <user> 下一步想推动的行动、追问、试探、拒绝、反制、调查或态度表达；可以带出场景对象，但不得替 <user> 写死最终选择、内心结论或完整台词。
+6. desc 建议 45-80 个中文字符；要自然、可执行、有画面感，不得短到只剩方向名，也不得扩写成正文段落。
+7. desc 不要使用“她可”“用户可选择”“局势因此”“将会如何”等外部解说式表达；应更像用户发给 AI 的下一轮推进意图。
+8. 不得用未铺垫的新变量压低、替换或无效化 <user> 已建立的身份、关系、资源、承诺与主动权；冲突方向也必须保留 <user> 的回应和改变空间。
+9. 不得为了制造狗血、虐点或阻碍，强行让角色做出与人设、身份、利益和因果逻辑不符的行为。
+
+## desc 写作规范
+生成 desc 文案时须遵守以下规则：
+- 用动作和行为呈现情绪，不贴标签（不写"他愤怒地""她温柔地"）
+- 直接写做了什么，不写没做什么（"他朝廊道走过去"而非"没有原路返回，而是走向廊道"）
+- 不使用否定式罗列（"没有……也没有……而是……""不是……而是……"）
+- 不使用极端程度副词（极其、极为、异常、非常、十分、特别、超级）
+- 不给声音和语气贴标签（不写"语气里带着""声音里透着"）
+- 清除无功能修饰词，物品和环境只写客观物理特征
+- 不用"那"字开头
+- 不使用模糊指代（"对方""对面的人"）
+- 禁止使用以下词汇及相关意象：猎人、猎物、游戏开始、游戏结束、棋子、棋局、棋盘
+
+## 输出格式
+按指定结构输出普通文本，顶层必须是数组，且正好 3 项。
+
+每项只能包含以下字段：
+- tag：固定为 canon、diverge、break 之一
+- tagLabel：展示用标签
+- title：10 个中文字符以内的方向标题
+- desc：点击后可直接作为下一轮输入使用的推进指令
+
+三项 tag 必须依次为：
+1. canon：情感向，顺着当前人物关系与情绪自然推进。
+2. diverge：张力向，让矛盾、误会、利益冲突或立场差异变得更尖锐，但不得强行贬低或剥夺 <user>。
+3. break：伏笔向，引出已铺垫的信息差、隐藏动机、旧事回响或局势暗线。
+
+严格按下面数组结构输出，不输出任何其他文字：
+[
+  {
+    "tag": "canon",
+    "tagLabel": "🌸 情感向",
+    "title": "方向标题（10字以内）",
+    "desc": "点击后可直接作为下一轮输入使用的推进指令"
+  },
+  {
+    "tag": "diverge",
+    "tagLabel": "⚡ 张力向",
+    "title": "方向标题（10字以内）",
+    "desc": "点击后可直接作为下一轮输入使用的推进指令"
+  },
+  {
+    "tag": "break",
+    "tagLabel": "🔮 伏笔向",
+    "title": "方向标题（10字以内）",
+    "desc": "点击后可直接作为下一轮输入使用的推进指令"
+  }
+]
+
+输出前暗中自检一次，不输出自检过程：
+- 顶层是否为数组，且正好 3 项
+- 三项 tag 是否依次为 canon、diverge、break
+- 每项是否只包含 tag、tagLabel、title、desc
+- title 是否 10 字以内
+- desc 是否能被点击后直接作为下一轮输入使用
+- desc 是否避免了“她可”“用户可选择”“局势因此”等外部解说
+- desc 是否保留 <user> 的主动权，没有替 <user> 写死最终态度
+- desc 是否有具体场景或对话切入点，且没有禁用词和禁用意象
+- 是否没有凭空压低、替换或无效化 <user> 已建立的位置
+- 是否没有 Markdown、代码块或结构外文本
+
+[/穿书模式·后续推演指令]`;
 
 const TB_DEFAULT_ONGOING_PROMPT =
 `[穿书模式·进行中]
@@ -7593,7 +7658,7 @@ function niGetTbStoryBarHtml() {
     <!-- 推演结果 -->
     <div class="ni-tb-infer-block" id="ni-tb-infer-block">
       <div class="ni-tb-infer-toggle expanded" id="ni-tb-infer-toggle">
-        <span class="ni-tb-infer-toggle-label">以下为后文推演走向，仅供参考</span>
+        <span class="ni-tb-infer-toggle-label">以下为下一步行动选项，点击填入输入框</span>
         <i class="ti ti-chevron-up ni-tb-infer-toggle-icon expanded" id="ni-tb-infer-toggle-icon"></i>
       </div>
       <div class="ni-tb-infer-list vis" id="ni-tb-infer-list"></div>
@@ -8051,15 +8116,13 @@ async function niTbGenerateInfer() {
             data.forEach((d, i) => {
                 const item = document.createElement('div');
                 item.className = 'ni-tb-infer-item ni-tb-fade-in';
+                item.dataset.desc = d.desc || d.description || '';
                 item.innerHTML = `
                   <div class="ni-tb-infer-num">${i + 1}</div>
                   <div class="ni-tb-infer-content">
                     <span class="ni-tb-infer-tag ni-tb-tag-${niEsc(d.tag || 'canon')}">${niEsc(d.tagLabel || d.tag)}</span>
                     <div class="ni-tb-infer-title">${niEsc(d.title)}</div>
                     <div class="ni-tb-infer-desc">${niEsc(d.desc)}</div>
-                    <div class="ni-tb-infer-adopt" data-desc="${niEsc(d.title + '：' + d.desc)}">
-                      <i class="ti ti-arrow-right" style="font-size:10px"></i>采用此方向
-                    </div>
                   </div>`;
                 inferList.appendChild(item);
             });
@@ -8173,9 +8236,9 @@ ni_query{display:none!important}
 .ni-tb-sc-type.pivot{background:#FAECE7;color:#5A2233}
 .ni-tb-sc-title{font-size:12px;font-weight:500;color:var(--color-text-primary,#1a1a1a);line-height:1.4;margin-bottom:5px}
 .ni-tb-sc-desc{font-size:10px;color:var(--color-text-secondary,#5a5a6a);line-height:1.4;overflow:hidden}.ni-tb-sc-extras{display:flex;flex-direction:column;gap:1px;margin-top:3px;overflow:hidden}.ni-tb-sc-event,.ni-tb-sc-fore{display:flex;align-items:center;gap:2px;font-size:10px;line-height:1.35;color:var(--color-text-tertiary,#9a9aaa);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ni-tb-sc-event i{font-size:9px;color:rgba(208,100,110,.5);flex-shrink:0}.ni-tb-sc-fore i{font-size:9px;color:rgba(120,100,200,.5);flex-shrink:0}
-.ni-tb-sc-check{position:absolute;top:10px;right:10px;width:16px;height:16px;border-radius:50%;border:0.5px solid var(--color-border-secondary,#d8d8de);background:var(--color-background-secondary,#f7f7f8);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .2s;z-index:3}
+.ni-tb-sc-check{position:absolute;top:10px;right:10px;width:15px;height:15px;border-radius:50%;border:0.5px solid rgba(160,68,94,.3);background:var(--color-background-secondary,#f7f7f8);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .2s;z-index:3}
 .ni-tb-sc-check.checked{background:#fde8ea;border-color:rgba(208,100,110,.5)}
-.ni-tb-sc-check i{font-size:10px;color:transparent;transition:color .2s}
+.ni-tb-sc-check i{font-size:9px;color:transparent;transition:color .2s}
 .ni-tb-sc-check.checked i{color:#c05a62}
 .ni-tb-stage-done-badge{display:flex;align-items:center;justify-content:center;gap:5px;padding:10px 16px;font-size:11px;color:#c05a62;background:#fff5f6;border-top:0.5px solid rgba(208,100,110,.15)}
 .ni-tb-infer-block{display:none;flex-direction:column;background:var(--color-background-primary,#fff);border-top:0.5px solid var(--color-border-tertiary,#e8e8ec)}
@@ -8188,7 +8251,7 @@ ni_query{display:none!important}
 .ni-tb-infer-toggle-icon.expanded{transform:rotate(180deg)}
 .ni-tb-infer-list{display:none;flex-direction:column}
 .ni-tb-infer-list.vis{display:flex}
-.ni-tb-infer-item{display:flex;align-items:flex-start;gap:12px;padding:13px 16px;border-bottom:0.5px solid var(--color-border-tertiary,#e8e8ec);transition:background .15s}
+.ni-tb-infer-item{display:flex;align-items:flex-start;gap:12px;padding:13px 16px;border-bottom:0.5px solid var(--color-border-tertiary,#e8e8ec);transition:background .15s;cursor:pointer}
 .ni-tb-infer-item:last-child{border-bottom:none}
 .ni-tb-infer-item:hover{background:var(--color-background-secondary,#f7f7f8)}
 .ni-tb-infer-num{flex-shrink:0;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;background:var(--color-background-secondary,#f7f7f8);border:0.5px solid var(--color-border-secondary,#d8d8de);color:var(--color-text-tertiary,#9a9aaa);margin-top:1px}
@@ -8199,8 +8262,6 @@ ni_query{display:none!important}
 .ni-tb-tag-break{background:#fde8ea;color:#c05a62}
 .ni-tb-infer-title{font-size:12px;font-weight:500;color:var(--color-text-primary,#1a1a1a);margin-bottom:4px;line-height:1.4}
 .ni-tb-infer-desc{font-size:11px;color:var(--color-text-secondary,#5a5a6a);line-height:1.6}
-.ni-tb-infer-adopt{display:inline-flex;align-items:center;gap:3px;margin-top:6px;padding:3px 9px;border-radius:10px;border:0.5px solid var(--color-border-secondary,#d8d8de);background:var(--color-background-secondary,#f7f7f8);font-size:10px;color:var(--color-text-secondary,#5a5a6a);cursor:pointer;transition:all .15s}
-.ni-tb-infer-adopt:hover{background:rgba(208,100,110,.08);border-color:rgba(208,100,110,.3);color:#c05a62}
 .ni-tb-icon-only{padding:5px 10px !important;min-width:32px;justify-content:center}
 @keyframes ni-tb-spin{to{transform:rotate(360deg)}}
 .ni-tb-spin{animation:ni-tb-spin .8s linear infinite}
@@ -8320,11 +8381,11 @@ function niTbBindBarEvents() {
         togIcon?.classList.toggle('expanded', expanded);
     });
 
-    // 推演「采用」按钮（事件委托）
+    // 推演选项：点击整条填入输入框
     document.getElementById('ni-tb-infer-list')?.addEventListener('click', (e) => {
-        const adoptEl = e.target.closest('.ni-tb-infer-adopt');
-        if (!adoptEl) return;
-        const desc = adoptEl.dataset.desc || '';
+        const item = e.target.closest('.ni-tb-infer-item');
+        if (!item) return;
+        const desc = item.dataset.desc || '';
         const ta   = document.getElementById('send_textarea') || document.querySelector('#send_textarea');
         if (ta) {
             ta.value = desc;
@@ -8859,8 +8920,14 @@ console.log('[NI-TB] 穿书模式模块已加载');
             el.innerHTML = '<span class="ni-sdot"></span>' + niPopEsc(s.title || s.name || ('阶段 ' + (i+1)));
             el.addEventListener('click', e => {
                 e.stopPropagation();
-                if (val) val.textContent = s.title || s.name || '阶段 ' + (i+1);
-                niPopBuildStages(stages, i);
+                const { nodes } = niPopGetState();
+                const firstIdx = nodes.findIndex(n => n.stageIdx === s.stageIdx);
+                if (firstIdx >= 0) _popCurIdx = firstIdx;
+                _popStageOpen = false;
+                drop.classList.remove('vis');
+                const arrow = q('ni-pop-stage-arrow')?.querySelector('span');
+                if (arrow) arrow.className = 'ni-arr-ds';
+                niPopRender();
             });
             drop.appendChild(el);
         });
@@ -9263,6 +9330,18 @@ console.log('[NI-TB] 穿书模式模块已加载');
             const chev = q('ni-pop-infer-chev')?.querySelector('span');
             if (chev) chev.className = _popInferExp ? 'ni-arr-us' : 'ni-arr-ds';
         });
+
+        q('ni-pop-infer-items')?.addEventListener('click', (e) => {
+            const item = e.target.closest('.ni-infer-item');
+            if (!item) return;
+            const desc = item?.dataset.desc || '';
+            const ta = document.getElementById('send_textarea') || document.querySelector('#send_textarea');
+            if (ta) {
+                ta.value = desc;
+                ta.dispatchEvent(new Event('input', { bubbles: true }));
+                ta.focus();
+            }
+        });
     }
 
     function niPopInferDone(btn, lbl) {
@@ -9282,6 +9361,7 @@ console.log('[NI-TB] 穿书模式模块已加载');
                     const tagMap = { canon:'ni-itag-canon', diverge:'ni-itag-diverge', break:'ni-itag-break' };
                     const el = document.createElement('div');
                     el.className = 'ni-infer-item ni-fade-in';
+                    el.dataset.desc = d.desc || d.description || '';
                     el.innerHTML =
                         '<div class="ni-infer-idx">' + (i+1) + '</div>' +
                         '<div class="ni-infer-body">' +
@@ -9329,7 +9409,12 @@ console.log('[NI-TB] 穿书模式模块已加载');
 #ni-popup-wrap{position:fixed !important;left:0 !important;top:0 !important;width:100vw !important;height:100vh !important;z-index:2147483645 !important;pointer-events:none;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}
 #ni-popup-overlay{position:absolute;inset:0;background:rgba(180,160,220,.18);backdrop-filter:blur(2px);cursor:pointer;display:none}
 .ni-popup-panel{pointer-events:auto;transform-origin:center center;transform:scale(0.88);opacity:0;transition:transform .36s cubic-bezier(.34,1.25,.64,1),opacity .26s ease;filter:drop-shadow(0 8px 32px rgba(160,120,200,.28));width:320px;max-height:calc(100vh - 32px);display:none;flex-direction:column;border-radius:6px;overflow:visible;padding-bottom:24px}
-.ni-popup-panel.vis{transform:scale(1);opacity:1}`;
+.ni-popup-panel.vis{transform:scale(1);opacity:1}
+.ni-popup-panel .ni-rcp-body,.ni-popup-panel .ni-node-list{scrollbar-width:thin;scrollbar-color:#dbeeff #fff8fc}
+.ni-popup-panel .ni-rcp-body::-webkit-scrollbar,.ni-popup-panel .ni-node-list::-webkit-scrollbar{width:6px}
+.ni-popup-panel .ni-rcp-body::-webkit-scrollbar-track,.ni-popup-panel .ni-node-list::-webkit-scrollbar-track{background:#fff8fc;border-left:1px dashed rgba(245,210,222,.5)}
+.ni-popup-panel .ni-rcp-body::-webkit-scrollbar-thumb,.ni-popup-panel .ni-node-list::-webkit-scrollbar-thumb{background:linear-gradient(to bottom,#f8dbe6,#dbeeff);border-radius:6px;border:1px solid #fff8fc}
+.ni-popup-panel .ni-rcp-body::-webkit-scrollbar-thumb:hover,.ni-popup-panel .ni-node-list::-webkit-scrollbar-thumb:hover{background:linear-gradient(to bottom,#f2c7d8,#cfe2ff)}`;
         _niPopDoc.head.appendChild(style);
     }
 
