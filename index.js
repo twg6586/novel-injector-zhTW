@@ -5652,6 +5652,13 @@ function niApplyTavernSurfaceTheme(cfg = {}) {
     if (!app) return;
     niClearTavernSurfaceInlineProps(app);
     if (cfg.themeSurfaceFollowPreset === false) return;
+    app.classList.add('ni-surface-tavern');
+    const source = niTavernSurfaceSource(app);
+    if (!source) return;
+    const sourceStyle = getComputedStyle(source);
+    NI_TAVERN_SURFACE_INLINE_PROPS.forEach(name => {
+        niSetTavernSurfaceProp(app, name, sourceStyle.getPropertyValue(name));
+    });
 }
 
 function niApplyThemeWithSurface(cfg = {}) {
