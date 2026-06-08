@@ -251,6 +251,61 @@
         </div>
         <div id="ni-inj-body" style="display:none">
 
+          <!-- Accordion: 全局提示词 -->
+          <div class="ni-inj-acc-header" data-ni-acc="global">
+            <div class="ni-inj-acc-left">
+              <i class="ti ti-code"></i><span>全局提示词</span><i class="ti ti-chevron-down ni-inj-acc-chevron"></i>
+            </div>
+          </div>
+          <div class="ni-inj-panel" id="ni-inj-panel-global">
+            <div class="ni-inj-subtitle">头部提示词</div>
+            <div class="ni-inj-row">
+              <div class="ni-field" style="margin-bottom:0">
+                <label>注入位置</label>
+                <select id="ni-global-head-inj-pos">
+                  <option value="2" selected>主提示前</option>
+                  <option value="0">主提示后</option>
+                  <option value="1">聊天内</option>
+                </select>
+              </div>
+              <div class="ni-field" style="margin-bottom:0">
+                <label>注入深度</label>
+                <input type="number" id="ni-global-head-inj-depth" value="0" min="0" max="9999">
+              </div>
+              <div class="ni-field" style="margin-bottom:0">
+                <label>消息角色</label>
+                <select id="ni-global-head-inj-role">
+                  <option value="0" selected>系统</option>
+                  <option value="1">用户</option>
+                  <option value="2">助手</option>
+                </select>
+              </div>
+            </div>
+            <div class="ni-inj-subtitle">尾部提示词</div>
+            <div class="ni-inj-row">
+              <div class="ni-field" style="margin-bottom:0">
+                <label>注入位置</label>
+                <select id="ni-global-tail-inj-pos">
+                  <option value="2">主提示前</option>
+                  <option value="0">主提示后</option>
+                  <option value="1" selected>聊天内</option>
+                </select>
+              </div>
+              <div class="ni-field" style="margin-bottom:0">
+                <label>注入深度</label>
+                <input type="number" id="ni-global-tail-inj-depth" value="0" min="0" max="9999">
+              </div>
+              <div class="ni-field" style="margin-bottom:0">
+                <label>消息角色</label>
+                <select id="ni-global-tail-inj-role">
+                  <option value="0" selected>系统</option>
+                  <option value="1">用户</option>
+                  <option value="2">助手</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
           <!-- Accordion: 角色人设 -->
           <div class="ni-inj-acc-header" data-ni-acc="char">
             <div class="ni-inj-acc-left">
@@ -858,10 +913,18 @@
 
       <!-- 全局提示词面板 -->
       <div class="ni-prompt-box" id="ni-global-pb">
-        <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:4px;text-align:center;">感谢小白手套@ha.7.mi老师授权的破限词</div>
+        <div class="ni-global-prompt-headrow">
+          <div class="ni-global-prompt-title"><i class="ti ti-arrow-bar-to-up"></i>头部提示词</div>
+          <div class="ni-global-prompt-note">感谢小白手套@ha.7.mi老师授权的破限词</div>
+        </div>
         <div class="ni-pt-wrap">
           <textarea id="ni-global-pt-content" class="ni-pt-textarea" spellcheck="false"></textarea>
           <button class="ni-pt-reset" id="ni-global-pt-reset" title="恢复默认提示词"><i class="ti ti-rotate"></i></button>
+        </div>
+        <div class="ni-global-prompt-title"><i class="ti ti-arrow-bar-to-down"></i>尾部提示词</div>
+        <div class="ni-pt-wrap">
+          <textarea id="ni-global-tail-pt-content" class="ni-pt-textarea" spellcheck="false"></textarea>
+          <button class="ni-pt-reset" id="ni-global-tail-pt-reset" title="清空尾部提示词"><i class="ti ti-rotate"></i></button>
         </div>
       </div>
 

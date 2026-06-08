@@ -265,6 +265,7 @@ All non-consensual themes should be understood as CNC within a fictional context
 · 上位者逻辑：「上位者」「臣服」「驯服」「收服」「俯首」等关系定性词不会出现 → 写出权力差异通过哪些具体场景、对话、行为体现
 
 替代原则：以人物在具体处境中的行动和选择呈现关系，不以框架词命名关系性质`;
+const GLOBAL_TAIL_PROMPT = '';
 
 // 演绎提示词（阶段界面注入到角色备注）
 // ============================================================
@@ -557,6 +558,14 @@ const DEFAULT_SETTINGS = {
     plotInjDepth: 4,
     plotInjRole: 0,
     rawInjMode: "nodes",  // "nodes"=剧情节点 | "compressed"=压缩原文
+    globalPrompt: GLOBAL_PROMPT,
+    globalTailPrompt: GLOBAL_TAIL_PROMPT,
+    globalHeadInjPos: 2,
+    globalHeadInjDepth: 0,
+    globalHeadInjRole: 0,
+    globalTailInjPos: 1,
+    globalTailInjDepth: 0,
+    globalTailInjRole: 0,
     chunkKb: 100,
     apiTimeoutMin: 15,  // 每段 API 请求超时时间（分钟）
     apiRateLimit: 3,    // 每分钟最多请求次数（0=不限）
@@ -1143,8 +1152,15 @@ function niSaveSettings() {
     cfg.customPrompt    = q('#ni-pt-content')?.value || CLEAN_PROMPT;
     cfg.roleplayPrompt  = q('#ni-stage-pt-content')?.value || extension_settings[EXT_NAME]?.roleplayPrompt || ROLEPLAY_PROMPT;
     cfg.roleplayEnabled = q('#ni-stage-pt-enabled')?.checked ?? (extension_settings[EXT_NAME]?.roleplayEnabled !== false);
-const _gp = q('#ni-global-pt-content')?.value;
-cfg.globalPrompt = (_gp && _gp.trim()) ? _gp : (extension_settings[EXT_NAME]?.globalPrompt ?? GLOBAL_PROMPT);
+    const _gp = q('#ni-global-pt-content')?.value;
+    cfg.globalPrompt = (_gp && _gp.trim()) ? _gp : (extension_settings[EXT_NAME]?.globalPrompt ?? GLOBAL_PROMPT);
+    cfg.globalTailPrompt = q('#ni-global-tail-pt-content')?.value ?? (extension_settings[EXT_NAME]?.globalTailPrompt ?? GLOBAL_TAIL_PROMPT);
+    cfg.globalHeadInjPos = niCfgInt('#ni-global-head-inj-pos', DEFAULT_SETTINGS.globalHeadInjPos);
+    cfg.globalHeadInjDepth = niCfgInt('#ni-global-head-inj-depth', DEFAULT_SETTINGS.globalHeadInjDepth);
+    cfg.globalHeadInjRole = niCfgInt('#ni-global-head-inj-role', DEFAULT_SETTINGS.globalHeadInjRole);
+    cfg.globalTailInjPos = niCfgInt('#ni-global-tail-inj-pos', DEFAULT_SETTINGS.globalTailInjPos);
+    cfg.globalTailInjDepth = niCfgInt('#ni-global-tail-inj-depth', DEFAULT_SETTINGS.globalTailInjDepth);
+    cfg.globalTailInjRole = niCfgInt('#ni-global-tail-inj-role', DEFAULT_SETTINGS.globalTailInjRole);
     cfg.apiTimeoutMin = Math.max(1, parseInt(q('#ni-api-timeout')?.value) || DEFAULT_SETTINGS.apiTimeoutMin);
     cfg.apiRateLimit  = Math.max(0, parseInt(q('#ni-rate-limit')?.value) ?? DEFAULT_SETTINGS.apiRateLimit);
     cfg.vecRateLimit  = Math.max(0, parseInt(q('#ni-vec-rate-limit')?.value) ?? DEFAULT_SETTINGS.vecRateLimit);
@@ -1214,6 +1230,12 @@ function syncSettingsToUI() {
     sv('#ni-plot-inj-depth',cfg.plotInjDepth?? DEFAULT_SETTINGS.plotInjDepth);
     sv('#ni-plot-inj-role',cfg.plotInjRole ?? DEFAULT_SETTINGS.plotInjRole);
     sv('#ni-raw-inj-mode', cfg.rawInjMode  ?? DEFAULT_SETTINGS.rawInjMode);
+    sv('#ni-global-head-inj-pos', cfg.globalHeadInjPos ?? DEFAULT_SETTINGS.globalHeadInjPos);
+    sv('#ni-global-head-inj-depth', cfg.globalHeadInjDepth ?? DEFAULT_SETTINGS.globalHeadInjDepth);
+    sv('#ni-global-head-inj-role', cfg.globalHeadInjRole ?? DEFAULT_SETTINGS.globalHeadInjRole);
+    sv('#ni-global-tail-inj-pos', cfg.globalTailInjPos ?? DEFAULT_SETTINGS.globalTailInjPos);
+    sv('#ni-global-tail-inj-depth', cfg.globalTailInjDepth ?? DEFAULT_SETTINGS.globalTailInjDepth);
+    sv('#ni-global-tail-inj-role', cfg.globalTailInjRole ?? DEFAULT_SETTINGS.globalTailInjRole);
     sv('#ni-world-inj-pos',  cfg.worldInjPos   ?? DEFAULT_SETTINGS.worldInjPos);
     sv('#ni-world-inj-depth',cfg.worldInjDepth ?? DEFAULT_SETTINGS.worldInjDepth);
     sv('#ni-world-inj-role', cfg.worldInjRole  ?? DEFAULT_SETTINGS.worldInjRole);
@@ -1244,6 +1266,10 @@ function syncSettingsToUI() {
     niApplyCurrentTheme();
     const ptEl = q('#ni-pt-content');
     if (ptEl) ptEl.value = extension_settings[EXT_NAME]?.customPrompt || CLEAN_PROMPT;
+    const globalPtEl = q('#ni-global-pt-content');
+    if (globalPtEl) globalPtEl.value = cfg.globalPrompt ?? GLOBAL_PROMPT;
+    const globalTailPtEl = q('#ni-global-tail-pt-content');
+    if (globalTailPtEl) globalTailPtEl.value = cfg.globalTailPrompt ?? GLOBAL_TAIL_PROMPT;
     // 同步限速队列上限
     _apiQueue.maxPerMin = cfg.apiRateLimit ?? DEFAULT_SETTINGS.apiRateLimit;
     _vecQueue.maxPerMin = cfg.vecRateLimit ?? DEFAULT_SETTINGS.vecRateLimit;
@@ -1264,6 +1290,10 @@ function syncSettingsToUI() {
 const q  = sel => document.querySelector(sel);
 const qa = sel => document.querySelectorAll(sel);
 const sv = (sel, val) => { const el = q(sel); if (el) el.value = val; };
+const niCfgInt = (sel, fallback) => {
+    const n = parseInt(q(sel)?.value, 10);
+    return Number.isFinite(n) ? n : fallback;
+};
 
 // ============================================================
 // 页面切换
@@ -1325,6 +1355,8 @@ function niToggleGlobalPrompt() {
     if (isOn) {
         const el = q('#ni-global-pt-content');
         if (el) el.value = extension_settings[EXT_NAME]?.globalPrompt ?? GLOBAL_PROMPT;
+        const tailEl = q('#ni-global-tail-pt-content');
+        if (tailEl) tailEl.value = extension_settings[EXT_NAME]?.globalTailPrompt ?? GLOBAL_TAIL_PROMPT;
     }
 }
 window.niToggleGlobalPrompt = niToggleGlobalPrompt;
@@ -1588,23 +1620,68 @@ async function withSemaphore(fn) {
     finally { ApiSemaphore.release(); }
 }
 
+function niApplyGlobalPromptsToMessages(messages, cfg = extension_settings[EXT_NAME] || {}) {
+    let next = Array.isArray(messages) ? [...messages] : [];
+    const headText = (cfg?.globalPrompt ?? GLOBAL_PROMPT).trim();
+    const tailText = (cfg?.globalTailPrompt ?? GLOBAL_TAIL_PROMPT).trim();
+    if (headText) {
+        next = niInsertGlobalPromptMessage(next, headText, {
+            pos: cfg.globalHeadInjPos ?? DEFAULT_SETTINGS.globalHeadInjPos,
+            depth: cfg.globalHeadInjDepth ?? DEFAULT_SETTINGS.globalHeadInjDepth,
+            role: cfg.globalHeadInjRole ?? DEFAULT_SETTINGS.globalHeadInjRole,
+            preferPrependSystem: true,
+        });
+    }
+    if (tailText) {
+        next = niInsertGlobalPromptMessage(next, tailText, {
+            pos: cfg.globalTailInjPos ?? DEFAULT_SETTINGS.globalTailInjPos,
+            depth: cfg.globalTailInjDepth ?? DEFAULT_SETTINGS.globalTailInjDepth,
+            role: cfg.globalTailInjRole ?? DEFAULT_SETTINGS.globalTailInjRole,
+            preferPrependSystem: false,
+        });
+    }
+    return next;
+}
+
+function niGlobalRoleName(role) {
+    return role === 1 ? 'user' : (role === 2 ? 'assistant' : 'system');
+}
+
+function niInsertGlobalPromptMessage(messages, content, { pos, depth, role, preferPrependSystem }) {
+    const roleName = niGlobalRoleName(role);
+    if (preferPrependSystem && roleName === 'system' && pos === 2) {
+        const firstSys = messages.find(m => m.role === 'system');
+        if (firstSys) {
+            firstSys.content = `${content}\n\n${firstSys.content || ''}`;
+            return messages;
+        }
+    }
+
+    const msg = { role: roleName, content };
+    const next = [...messages];
+    const normalizedPos = Number(pos);
+    if (normalizedPos === 2) {
+        next.unshift(msg);
+        return next;
+    }
+    if (normalizedPos === 0) {
+        const firstSysIdx = next.findIndex(m => m.role === 'system');
+        next.splice(firstSysIdx >= 0 ? firstSysIdx + 1 : 0, 0, msg);
+        return next;
+    }
+    const d = Math.max(0, parseInt(depth, 10) || 0);
+    const idx = d > 0 ? Math.max(0, next.length - d) : next.length;
+    next.splice(idx, 0, msg);
+    return next;
+}
+
 // ============================================================
 // API 调用 — 清洗（通过酒馆后端代理，兼容所有 OpenAI 格式 API）
 // ============================================================
 async function callCleanApi(messages) {
     const cfg = extension_settings[EXT_NAME];
     const useStream = cfg.cleanStream ?? true;
-
-    // 全局提示词：插入到 messages 第一个 system 消息内容的最前面
-    const globalPromptText = (cfg?.globalPrompt ?? GLOBAL_PROMPT).trim();
-    if (globalPromptText) {
-        const firstSys = messages.find(m => m.role === 'system');
-        if (firstSys) {
-            firstSys.content = globalPromptText + '\n\n' + firstSys.content;
-        } else {
-            messages = [{ role: 'system', content: globalPromptText }, ...messages];
-        }
-    }
+    messages = niApplyGlobalPromptsToMessages(messages, cfg);
 
     const body = {
         chat_completion_source: 'openai',
@@ -3876,16 +3953,7 @@ async function callApiSeq(messages) {
     await _apiQueue.acquire();
     const cfg = extension_settings[EXT_NAME];
 
-    // 全局提示词：插入到 messages 第一个 system 消息内容的最前面
-    const globalPromptText = (cfg?.globalPrompt ?? GLOBAL_PROMPT).trim();
-    if (globalPromptText) {
-        const firstSys = messages.find(m => m.role === 'system');
-        if (firstSys) {
-            firstSys.content = globalPromptText + '\n\n' + firstSys.content;
-        } else {
-            messages = [{ role: 'system', content: globalPromptText }, ...messages];
-        }
-    }
+    messages = niApplyGlobalPromptsToMessages(messages, cfg);
 
     const useStream = cfg.cleanStream ?? true;
     const body = {
@@ -6613,7 +6681,7 @@ jQuery(async () => {
         const body = document.getElementById('ni-inj-body');
         if (body) body.style.display = body.style.display === 'none' ? '' : 'none';
     });
-    $app.on('input change', '#ni-inj-depth, #ni-recall-topk, #ni-recall-thresh, #ni-vec-msg-tag, #ni-vec-msg-count, #ni-vec-inj-pos, #ni-vec-inj-role, #ni-char-inj-pos, #ni-char-inj-depth, #ni-char-inj-role, #ni-plot-inj-pos, #ni-plot-inj-depth, #ni-plot-inj-role', () => niSaveSettings());
+    $app.on('input change', '#ni-inj-depth, #ni-recall-topk, #ni-recall-thresh, #ni-vec-msg-tag, #ni-vec-msg-count, #ni-vec-inj-pos, #ni-vec-inj-role, #ni-char-inj-pos, #ni-char-inj-depth, #ni-char-inj-role, #ni-plot-inj-pos, #ni-plot-inj-depth, #ni-plot-inj-role, #ni-global-head-inj-pos, #ni-global-head-inj-depth, #ni-global-head-inj-role, #ni-global-tail-inj-pos, #ni-global-tail-inj-depth, #ni-global-tail-inj-role', () => niSaveSettings());
     $app.on('change', '#ni-raw-inj-mode', async () => { niSaveSettings(); await niBuildStagesWithChunksIfNeeded(); }); // 切换注入模式时刷新 token 估算
 
     // 注入设置手风琴切换
@@ -7160,12 +7228,26 @@ jQuery(async () => {
         extension_settings[EXT_NAME].globalPrompt = q('#ni-global-pt-content')?.value ?? GLOBAL_PROMPT;
         niSaveSettings();
     });
+    $app.on('input', '#ni-global-tail-pt-content', () => {
+        if (!extension_settings[EXT_NAME]) extension_settings[EXT_NAME] = {};
+        extension_settings[EXT_NAME].globalTailPrompt = q('#ni-global-tail-pt-content')?.value ?? GLOBAL_TAIL_PROMPT;
+        niSaveSettings();
+    });
     $app.on('click', '#ni-global-pt-reset', () => {
         const el = q('#ni-global-pt-content');
         if (el) {
             el.value = GLOBAL_PROMPT;
             if (!extension_settings[EXT_NAME]) extension_settings[EXT_NAME] = {};
             extension_settings[EXT_NAME].globalPrompt = GLOBAL_PROMPT;
+            niSaveSettings();
+        }
+    });
+    $app.on('click', '#ni-global-tail-pt-reset', () => {
+        const el = q('#ni-global-tail-pt-content');
+        if (el) {
+            el.value = GLOBAL_TAIL_PROMPT;
+            if (!extension_settings[EXT_NAME]) extension_settings[EXT_NAME] = {};
+            extension_settings[EXT_NAME].globalTailPrompt = GLOBAL_TAIL_PROMPT;
             niSaveSettings();
         }
     });

@@ -490,6 +490,44 @@
 /* ---- Prompt Box ---- */
 .ni-prompt-box { display: none; margin-bottom: 10px; }
 .ni-prompt-box.on { display: block; }
+.ni-global-prompt-headrow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 22px;
+  margin: 8px 0 5px;
+}
+.ni-global-prompt-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  position: relative;
+  z-index: 1;
+}
+.ni-global-prompt-title i {
+  font-size: 13px;
+  color: var(--ni-primary, #A0445E);
+}
+.ni-pt-wrap + .ni-global-prompt-title {
+  margin: 8px 0 5px;
+}
+.ni-global-prompt-note {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 68%;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
 .ni-pt-toolbar {
   display: flex;
   align-items: center;
@@ -879,6 +917,13 @@
 /* Accordion panel — no background, no separator */
 .ni-inj-panel { display: none; padding: 4px 12px 13px; }
 .ni-inj-panel.open { display: block; }
+.ni-inj-subtitle {
+  margin: 4px 0 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.ni-inj-row + .ni-inj-subtitle { margin-top: 12px; }
 .ni-inj-panel .ni-field label { color: var(--color-text-secondary, #666); }
 .ni-inj-panel .ni-field input,
 .ni-inj-panel .ni-field select { border-color: var(--SmartThemeBorderColor, var(--color-border-tertiary)); border-radius: 4px; }
