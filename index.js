@@ -4509,6 +4509,16 @@ async function niStartVec() {
     let totalDone = 0;
     const stageIdxList = Object.keys(stageBuckets).map(Number);
     const totalChunks = stageIdxList.reduce((a, k) => a + stageBuckets[k].length, 0);
+    if (totalChunks <= 0) {
+        selectedStages.forEach(si => delete S.stageVecDone[Number(si)]);
+        S._vecRunning = false;
+        S.vecDone = Object.values(S.stageVecDone).some(v => v);
+        persistVecState();
+        if (titleBar2) { titleBar2.style.width = '0%'; titleBar2.classList.remove('g'); }
+        if (titleNote2) { titleNote2.textContent = '没有可向量化的文本'; titleNote2.classList.remove('g'); }
+        setBtn('#ni-btn-vec', false, '<i class="ti ti-database"></i>开始向量化');
+        return;
+    }
     // 记录各阶段是否有失败的 chunk，失败则不标记 vecDone
     const stageFailCount = {};
 
@@ -4540,7 +4550,7 @@ async function niStartVec() {
             titleNote2.textContent = `${selectedStages.size - failedStages.length} 段完成，${errCount} 个块失败`;
             titleNote2.classList.remove('g');
         }
-        setBtn('#ni-btn-vec', false, '<i class="ti ti-check"></i>向量化完成');
+        setBtn('#ni-btn-vec', false, '<i class="ti ti-alert-triangle"></i>向量化未完成');
         S._vecFailedChunks = _failedChunks;
         S._vecFillVisible = true;
         const fillBtn = q('#ni-btn-vec-fill');
