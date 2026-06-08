@@ -44,6 +44,7 @@ import {
 
 import { NI_THEME_DEFAULT } from './lib/theme-utils.js';
 import { createThemeEditor } from './lib/theme-editor.js';
+import { niApplyStatusbarTheme } from './lib/statusbar-theme.js';
 
 // ============================================================
 // 常量
@@ -569,6 +570,7 @@ const DEFAULT_SETTINGS = {
     themeSurfaceFollowPreset: true,
     themeBorderless: false,
     themeCardless: false,
+    themeStatusbarFollow: false,
     themeBackground: NI_THEME_DEFAULT.background,
     themeText: NI_THEME_DEFAULT.text,
     themeUserPresets: [],
@@ -5618,6 +5620,9 @@ const niThemeEditor = createThemeEditor({
     niEscAttr,
     niEscHtml,
     saveSettingsDebounced,
+    refreshStatusbar: (draft) => {
+        if (typeof niRefreshStorybarTheme === 'function') niRefreshStorybarTheme(draft);
+    },
 });
 
 function niApplyCurrentTheme() {
@@ -7135,6 +7140,9 @@ jQuery(async () => {
     $app.on('change', '#ni-theme-cardless', function() {
         niThemeEditor.setCardless(this.checked);
     });
+    $app.on('change', '#ni-theme-statusbar-follow', function() {
+        niThemeEditor.setStatusbarFollow(this.checked);
+    });
     $app.on('click', '#ni-theme-import', () => q('#ni-theme-import-file')?.click());
     $app.on('change', '#ni-theme-import-file', function() {
         niThemeEditor.importPresetFile(this.files?.[0]);
@@ -8161,6 +8169,7 @@ function niTbLoadState() {
 // ── 状态栏 HTML 构建 ──────────────────────────────────────────
 
 function niGetTbStoryBarHtml() {
+    const cfg = extension_settings[EXT_NAME] || {};
     const nodes  = niGetTbNodes();
     const stages = niGetTbStages();
     if (!nodes.length) return '';
@@ -8173,8 +8182,9 @@ function niGetTbStoryBarHtml() {
 
     const doneCount = nodes.filter(n => n.done).length;
     const statusLabel = doneCount === nodes.length ? '全部完成' : '进行中';
+    const themeFollowClass = cfg.themeStatusbarFollow ? ' ni-tb-theme-follow' : '';
 
-    return `<div class="ni-tb-shell" id="ni-storybar">
+    return `<div class="ni-tb-shell${themeFollowClass}" id="ni-storybar">
   <div class="ni-tb-bar" id="ni-tb-bar">
     <div class="ni-tb-pin"></div>
     <div class="ni-tb-status">${statusLabel}</div>
@@ -8374,6 +8384,7 @@ function niTbBuildTrack() {
         el.onclick     = (e) => niTbCardClick(e, gi, niGetTbNodes());
         track.appendChild(el);
     });
+    niRefreshStorybarTheme();
 }
 
 function niTbAnimateTo(newCur, nodes) {
@@ -8441,6 +8452,7 @@ function niTbAnimateTo(newCur, nodes) {
             el.style.opacity = ''; el.style.transform = '';
         }
     });
+    niRefreshStorybarTheme();
 }
 
 function niTbCardClick(e, idx, nodes) {
@@ -8472,6 +8484,7 @@ function niTbSyncMeta(nodes) {
     const el = (id) => document.getElementById(id);
     if (el('ni-tb-curtitle')) el('ni-tb-curtitle').textContent = n.title;
     if (el('ni-tb-meta'))     el('ni-tb-meta').textContent     = `节点 ${view.curIdx + 1} / ${view.nodes.length}`;
+    niRefreshStorybarTheme();
 }
 
 function niTbRefreshNodePanel(nodes) {
@@ -8480,6 +8493,7 @@ function niTbRefreshNodePanel(nodes) {
     const view = niTbStageView(nodes, S.tbCurIdx);
     panel.innerHTML = niTbBuildNodePanelHtml(view.nodes, S.tbCurIdx);
     niTbBindNodePanelEvents();
+    niRefreshStorybarTheme();
 }
 
 async function niTbToggleCheck(idx) {
@@ -8878,6 +8892,12 @@ function niTbRenderStoryBar() {
 
     niTbBindEvents();
     niTbBuildTrack();
+    niRefreshStorybarTheme();
+}
+
+function niRefreshStorybarTheme(themeDraft = null) {
+    const cfg = extension_settings[EXT_NAME] || {};
+    niApplyStatusbarTheme(themeDraft ? { ...cfg, ...themeDraft } : cfg);
 }
 
 // ── 事件绑定 ─────────────────────────────────────────────────
@@ -9027,6 +9047,7 @@ function niTbRebuildStageList() {
     if (!list) return;
     list.innerHTML = niTbBuildStageListHtml(stages, curNode?.stageIdx);
     // 重新绑定点击（父级委托在 bindBarEvents 中，此处不重复绑定）
+    niRefreshStorybarTheme();
 }
 
 // ── Settings 页 UI 绑定 ───────────────────────────────────────
