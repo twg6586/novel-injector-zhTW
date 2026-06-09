@@ -113,6 +113,23 @@
 .ni-app.ni-borderless .ni-tl-dot-pivot {
   box-shadow: 0 0 0 1.5px var(--ni-pivot, #D68AC2) !important;
 }
+.ni-app.ni-borderless input[type="checkbox"],
+.ni-app.ni-borderless select,
+.ni-app.ni-borderless .ni-cfg-chk,
+.ni-app.ni-borderless .ni-sp-check,
+.ni-app.ni-borderless .ni-nr-chk,
+.ni-app.ni-borderless .ni-tb-sc-check {
+  border-color: var(--ni-primary-alpha-30, rgba(160, 68, 94, .3)) !important;
+  outline-color: var(--ni-primary-alpha-30, rgba(160, 68, 94, .3)) !important;
+}
+.ni-app.ni-borderless input[type="checkbox"]:checked + .ni-cfg-chk,
+.ni-app.ni-borderless .ni-cfg-chk.checked,
+.ni-app.ni-borderless .ni-sp-check.on,
+.ni-app.ni-borderless .ni-nr-chk.checked,
+.ni-app.ni-borderless .ni-tb-sc-check.checked {
+  border-color: var(--ni-primary, #A0445E) !important;
+  outline-color: var(--ni-primary, #A0445E) !important;
+}
 
 /* ---- Card Title ---- */
 .ni-ctitle {
