@@ -576,6 +576,7 @@ const DEFAULT_SETTINGS = {
     themePresetOverrides: {},
     themeDeletedPresetIds: [],
     vecInjDisabled: false, // 有向量数据但用户选择不调用向量注入
+    tbRestoreAfterPluginEnable: false,
     novelLibrary: [],     // 小说快照库 [{name, key, snapshot}]
     // 世界设定注入设置
     worldInjPos:   2,   // 默认主提示前
@@ -801,6 +802,7 @@ function niLoadSettings() {
     Object.keys(DEFAULT_SETTINGS).forEach(k => {
         if (saved[k] === undefined) saved[k] = DEFAULT_SETTINGS[k];
     });
+    niUpgradeLegacyTbDefaultPrompts(saved);
 
     // 还原轻量索引（重数据在 niLoadSettings 末尾从服务端异步拉取）
     if (saved._stageStates) S.stageStates = saved._stageStates;
@@ -3572,6 +3574,12 @@ function niBuildUserSubIdentityPrompt() {
     return `[用户代入角色]\n<user>代表原著角色「${displayName}」。以下称呼只作为同一角色的映射：${names.join('、')}。后续正文使用<user>，不要把原名或称呼写成另一个角色。\n[/用户代入角色]`;
 }
 
+function niBuildUserRoleBoundaryPrompt() {
+    const cfg = niGetUserSubConfig();
+    if (cfg.userSubEnabled) return '';
+    return `[关于用户角色]\n用户 <user> 不是原著主角，拥有独立经历和选择权。原著主角/配角仅为故事中的NPC，<user>的行为不必与原著剧情完全一致，AI 不替用户执行原著角色的行动。\n重要：用户不是原著角色，原著主角和配角均为独立NPC，禁止将原著剧情事件自动映射到用户角色。\n[/关于用户角色]`;
+}
+
 function niReplaceOutsideAngleTags(text, pattern, replacement) {
     return String(text).split(/(<[^>\n]*>)/g).map(part => {
         if (part.startsWith('<') && part.endsWith('>')) return part;
@@ -5267,38 +5275,7 @@ async function onPromptReady(eventData) {
     // 插件总开关
     if (extension_settings[EXT_NAME]?.pluginEnabled === false) return;
 
-    const ctx = getContext();
-    const chat = ctx?.chat || [];
-    if (!chat.length) return;
-
-    // 已开启的阶段（遍历 1..stageMapN，undefined 视为默认开启）
-    const n = S.stageMapN;
-    if (n <= 0) return;
-    const enabledStages = [];
-    for (let i = 1; i <= n; i++) {
-        if (S.stageStates[i] !== false) enabledStages.push(i);
-    }
-    if (!enabledStages.length) return;
-
     const cfg = extension_settings[EXT_NAME];
-
-    // 读取各自的注入配置
-    const vecPos   = cfg.vecInjPos   ?? DEFAULT_SETTINGS.vecInjPos;
-    const vecDepth = cfg.injDepth    ?? DEFAULT_SETTINGS.injDepth;
-    const vecRole  = cfg.vecInjRole  ?? DEFAULT_SETTINGS.vecInjRole;
-    const charPos  = cfg.charInjPos  ?? DEFAULT_SETTINGS.charInjPos;
-    const charDepth= cfg.charInjDepth?? DEFAULT_SETTINGS.charInjDepth;
-    const charRole = cfg.charInjRole ?? DEFAULT_SETTINGS.charInjRole;
-    const plotPos  = cfg.plotInjPos  ?? DEFAULT_SETTINGS.plotInjPos;
-    const plotDepth= cfg.plotInjDepth?? DEFAULT_SETTINGS.plotInjDepth;
-    const plotRole = cfg.plotInjRole ?? DEFAULT_SETTINGS.plotInjRole;
-
-    // 分离已向量/未向量的开启阶段（若用户关闭向量注入，则将已向量阶段降级为 raw 注入）
-    const vecInjDisabled = !!(cfg.vecInjDisabled);
-    const vecStages = vecInjDisabled ? [] : enabledStages.filter(si => S.stageVecDone[si]);
-    const rawStages = vecInjDisabled
-        ? enabledStages.slice()
-        : enabledStages.filter(si => !S.stageVecDone[si]);
 
     // 获取 setExtensionPrompt 一次供后续使用
     let setExtensionPrompt, extension_prompt_types;
@@ -5327,6 +5304,41 @@ async function onPromptReady(eventData) {
     if (userSubIdentityPrompt) {
         doInject(`${EXT_NAME}_user_sub`, userSubIdentityPrompt, 0, 0, 0, { applyUserSub: false });
     }
+    const userRoleBoundaryPrompt = niBuildUserRoleBoundaryPrompt();
+    if (userRoleBoundaryPrompt) {
+        doInject(`${EXT_NAME}_user_role_boundary`, userRoleBoundaryPrompt, 0, 0, 0, { applyUserSub: false });
+    }
+
+    const ctx = getContext();
+    const chat = ctx?.chat || [];
+    if (!chat.length) return;
+
+    // 已开启的阶段（遍历 1..stageMapN，undefined 视为默认开启）
+    const n = S.stageMapN;
+    if (n <= 0) return;
+    const enabledStages = [];
+    for (let i = 1; i <= n; i++) {
+        if (S.stageStates[i] !== false) enabledStages.push(i);
+    }
+    if (!enabledStages.length) return;
+
+    // 读取各自的注入配置
+    const vecPos   = cfg.vecInjPos   ?? DEFAULT_SETTINGS.vecInjPos;
+    const vecDepth = cfg.injDepth    ?? DEFAULT_SETTINGS.injDepth;
+    const vecRole  = cfg.vecInjRole  ?? DEFAULT_SETTINGS.vecInjRole;
+    const charPos  = cfg.charInjPos  ?? DEFAULT_SETTINGS.charInjPos;
+    const charDepth= cfg.charInjDepth?? DEFAULT_SETTINGS.charInjDepth;
+    const charRole = cfg.charInjRole ?? DEFAULT_SETTINGS.charInjRole;
+    const plotPos  = cfg.plotInjPos  ?? DEFAULT_SETTINGS.plotInjPos;
+    const plotDepth= cfg.plotInjDepth?? DEFAULT_SETTINGS.plotInjDepth;
+    const plotRole = cfg.plotInjRole ?? DEFAULT_SETTINGS.plotInjRole;
+
+    // 分离已向量/未向量的开启阶段（若用户关闭向量注入，则将已向量阶段降级为 raw 注入）
+    const vecInjDisabled = !!(cfg.vecInjDisabled);
+    const vecStages = vecInjDisabled ? [] : enabledStages.filter(si => S.stageVecDone[si]);
+    const rawStages = vecInjDisabled
+        ? enabledStages.slice()
+        : enabledStages.filter(si => !S.stageVecDone[si]);
 
     // ① 向量块注入（已向量阶段 → 语义召回）
     if (vecStages.length) {
@@ -5441,7 +5453,7 @@ async function onPromptReady(eventData) {
         S.characters.forEach(c => {
             if (!c.name) return;
             if (c.enabled === false) return;
-            const lines = [`[角色：${c.name}（${c.role || '其他'}）]`];
+            const lines = [`[原著角色NPC：${c.name}（${c.role || '其他'}）]`];
             const showRaw = c.showRaw !== false;
             const showAi  = c.showAi  !== false;
             if (showAi && c.aiProfile) {
@@ -5464,7 +5476,7 @@ async function onPromptReady(eventData) {
         });
     }
     if (charLines.length) {
-        const charContent = `[角色人设]\n${charLines.join('\n\n')}\n[/角色人设]`;
+        const charContent = `[原著角色人设]\n说明：以下所有原著角色都是故事中的独立NPC，不等同于 <user>。AI 可演绎这些NPC，但不得替 <user> 执行其行动，也不得把原著角色经历、剧情事件或身份关系自动映射到 <user>。\n\n${charLines.join('\n\n')}\n[/原著角色人设]`;
         doInject(`${EXT_NAME}_char`, charContent, charPos, charDepth, charRole);
     }
 
@@ -5707,10 +5719,39 @@ function niSyncPluginToggleUI() {
     if (row) row.classList.toggle('ni-switch-off', !enabled);
 }
 
+function niSyncTransBookToggleUI() {
+    const cfg = extension_settings[EXT_NAME] || {};
+    const enabled = !!cfg.transBookMode;
+    const chk = q('#ni-tb-chk');
+    const stateTxt = q('#ni-tb-state');
+    if (chk) chk.checked = enabled;
+    if (stateTxt) stateTxt.textContent = enabled ? '开' : '关';
+}
+
+function niSetTransBookMode(enabled) {
+    const cfg = extension_settings[EXT_NAME];
+    cfg.transBookMode = !!enabled;
+    niSyncTransBookToggleUI();
+    if (enabled) {
+        setTimeout(() => { niTbLoadState(); niTbRenderStoryBar(); }, 0);
+    } else {
+        document.getElementById('ni-storybar')?.remove();
+    }
+    if (typeof window.niPopSyncVisibility === 'function') window.niPopSyncVisibility();
+}
+
 function niTogglePlugin() {
     const cfg = extension_settings[EXT_NAME];
     const chk = q('#ni-plugin-chk');
-    cfg.pluginEnabled = chk ? chk.checked : cfg.pluginEnabled === false;
+    const enabled = chk ? chk.checked : cfg.pluginEnabled === false;
+    cfg.pluginEnabled = enabled;
+    if (!enabled) {
+        cfg.tbRestoreAfterPluginEnable = !!cfg.transBookMode;
+        niSetTransBookMode(false);
+    } else if (cfg.tbRestoreAfterPluginEnable) {
+        niSetTransBookMode(true);
+        cfg.tbRestoreAfterPluginEnable = false;
+    }
     niSyncPluginToggleUI();
     niSaveSettings();
     niSyncRoleplayToDepth();
@@ -7840,7 +7881,7 @@ window.niTbGenerateInfer = niTbGenerateInfer;
 
 // ── 默认提示词 ──────────────────────────────────────────────
 
-const TB_DEFAULT_ADVANCE_PROMPT =
+const TB_LEGACY_ADVANCE_PROMPT =
 `[穿书模式·当前叙事阶段]
 
 「{A_TITLE}」的剧情已告一段落，故事进入下一个叙事阶段。
@@ -7898,6 +7939,73 @@ const TB_DEFAULT_ADVANCE_PROMPT =
 1. 核心走向是本阶段的**叙事重心**，不是必须重演的脚本场景；让它在对话与细节中自然渗透
 2. 时间与地点跟随故事自然流动，不因锚点参数而冻结；锚点仅用于还原该节点事件时的参照
 3. <user> 的行动与选择优先——跟着走，不要绕回预设场景
+4. 禁止用原著以外的知识自行修正时间线或地点设定
+5. 全程保持沉浸式叙事，不跳出剧情进行规则说明
+
+[/穿书模式·当前叙事阶段]`;
+
+const TB_DEFAULT_ADVANCE_PROMPT =
+`[穿书模式·当前叙事阶段]
+
+「{A_TITLE}」的剧情已告一段落，故事进入下一个叙事阶段。
+
+▌当前阶段参考
+- 阶段标题：{B_TITLE}
+- 原著剧情节点：{B_BODY}
+
+▌关于剧情节点
+下面的剧情节点来自原著，用来告诉 AI：原著里这一阶段大概发生过什么、有哪些人物关系、时间地点和事件背景。
+
+剧情节点不是任务目标，不是必须完成的清单，也不是要求 AI 强行复刻的剧情。
+当前聊天已经发生的内容优先于剧情节点。
+
+如果用户的行动改变了原著前提，AI 应根据当前聊天重新推演后续发展，而不是把剧情拉回原著节点。
+如果用户没有主动推进到该节点相关事件，AI 只需要自然承接当前场景，不要强行跳转。
+
+▌关于时间与地点
+{B_TIME} 和 {B_LOCATION} 是原著节点发生时的参考背景，
+不是主人公在整个阶段中的固定处境。
+随着对话推进，时间自然流逝，人物可以移动、转场、经历新的日常。
+除非当前聊天明确回到该节点事件本身，否则不必将人物锁定于此时此地。
+
+▌节点类型处理
+- 主线节点：用于理解原著核心逻辑链，但不强制还原原著场景
+- 支线节点：可作为背景和可选线索，用户无兴趣时可自然跳过
+- 关键转折：用户干涉后，应按当前事实推演连锁变化
+
+▌用户行为优先
+用户干预时执行三步推演：
+① 锚定现状：确认当前聊天已经发生了什么、场景停在哪里
+② 推演连锁：基于角色人设和当前事实推演干涉引发的反应
+③ 自适应改写：动态修正后续走向，杜绝"已改写过去、未来仍照搬原著"的割裂
+
+▌用户叙事位置
+- <user> 已建立的身份、关系、资源、承诺、能力与情感位置是当前事实，不因原著剧情节点被自动降格、替换或无效化
+- 新阻碍、新人物、新关系或新权力变化必须来自当前事实、已存在设定、角色动机或用户输入，不得作为压制、惩罚、孤立或替代 <user> 的空降变量
+- 涉及 <user> 既有位置变化的剧情，必须保留知情、回应、拒绝、协商或改变结果的空间
+
+▌土著角色规则
+- 核心人设全程不变，言行贴合当下情境与情绪状态
+- 对用户的认知与态度从零积累，不预知穿越者身份，不自带原著滤镜
+- 禁止预知未发生的剧情、提前登场未到节点的人物
+
+▌你的职责
+- 每次回复前，先确认当前聊天正在发生什么，再决定原著剧情节点中哪些信息还能自然参考
+- 如果当前场景与原著节点有关，可以参考节点里的人物关系、背景信息、时间地点和事件后果
+- 如果当前场景已经偏离原著节点，应顺着当前聊天推演，不要把剧情拉回原著
+- 用户无明确操作时，仅自然推进当下场景，不强行跳转节点
+
+▌每次回复前静默校验
+① 当前聊天已经建立了哪些事实？
+② 用户此前有哪些干预？哪些原著走向已经被改写？
+③ 在场角色的核心人设与当前状态是否一致？
+④ 当前时间地点是否跟随故事自然流动，而非锁定于节点背景？
+⑤ 是否凭空压低、替换或无效化了 <user> 已建立的身份、关系、资源、承诺与主动权？
+
+▌写作守则
+1. 剧情节点只是原著参考，不是任务目标，也不是必须重演的脚本场景
+2. 时间与地点跟随故事自然流动，不因锚点参数而冻结；锚点仅用于还原该节点事件时的参照
+3. <user> 的行动与选择优先，跟着当前聊天走，不要绕回预设场景
 4. 禁止用原著以外的知识自行修正时间线或地点设定
 5. 全程保持沉浸式叙事，不跳出剧情进行规则说明
 
@@ -7995,12 +8103,20 @@ const TB_DEFAULT_INFER_PROMPT =
 
 [/穿书模式·后续推演指令]`;
 
-const TB_DEFAULT_ONGOING_PROMPT =
+const TB_LEGACY_ONGOING_PROMPT =
 `[穿书模式·进行中]
 当前阶段「{B_TITLE}」持续中，核心走向：{B_BODY}
 跟随用户行动自然推进，用户无操作时仅推进当下场景，不强行跳转节点。
 不得用未铺垫的新变量压低、替换或无效化 <user> 已建立的身份、关系、资源、承诺与主动权。
 阶段完成由用户确认。
+[/穿书模式·进行中]`;
+
+const TB_DEFAULT_ONGOING_PROMPT =
+`[穿书模式·进行中]
+当前阶段「{B_TITLE}」持续中，原著剧情节点：{B_BODY}
+剧情节点只是原著参考，用来说明原著里发生过什么、有哪些人物关系和事件背景；它不是任务目标，也不是必须完成的清单。
+当前聊天已经发生的内容优先。跟随用户行动自然推进，用户无操作时仅推进当下场景，不强行跳转节点。
+不得用未铺垫的新变量压低、替换或无效化 <user> 已建立的身份、关系、资源、承诺与主动权。
 [/穿书模式·进行中]`;
 
 const TB_DEFAULT_QUERY_PROMPT =
@@ -8041,7 +8157,7 @@ const TB_DEFAULT_IMMERSION_PROMPT =
 
 [/穿书模式·沉浸边界]`;
 
-const TB_DEFAULT_OPENING_PROMPT =
+const TB_LEGACY_OPENING_PROMPT =
 `[穿书模式·当前叙事阶段]
 
 故事从这里开始，进入第一个叙事阶段。
@@ -8103,6 +8219,73 @@ const TB_DEFAULT_OPENING_PROMPT =
 
 [/穿书模式·当前叙事阶段]`;
 
+const TB_DEFAULT_OPENING_PROMPT =
+`[穿书模式·当前叙事阶段]
+
+故事从这里开始，进入第一个叙事阶段。
+
+▌当前阶段参考
+- 阶段标题：{B_TITLE}
+- 原著剧情节点：{B_BODY}
+
+▌关于剧情节点
+下面的剧情节点来自原著，用来告诉 AI：原著里这一阶段大概发生过什么、有哪些人物关系、时间地点和事件背景。
+
+剧情节点不是任务目标，不是必须完成的清单，也不是要求 AI 强行复刻的剧情。
+当前聊天已经发生的内容优先于剧情节点。
+
+如果用户的行动改变了原著前提，AI 应根据当前聊天重新推演后续发展，而不是把剧情拉回原著节点。
+如果用户没有主动推进到该节点相关事件，AI 只需要自然承接当前场景，不要强行跳转。
+
+▌关于时间与地点
+{B_TIME} 和 {B_LOCATION} 是原著节点发生时的参考背景，
+不是主人公在整个阶段中的固定处境。
+随着对话推进，时间自然流逝，人物可以移动、转场、经历新的日常。
+除非当前聊天明确回到该节点事件本身，否则不必将人物锁定于此时此地。
+
+▌节点类型处理
+- 主线节点：用于理解原著核心逻辑链，但不强制还原原著场景
+- 支线节点：可作为背景和可选线索，用户无兴趣时可自然跳过
+- 关键转折：用户干涉后，应按当前事实推演连锁变化
+
+▌用户行为优先
+用户干预时执行三步推演：
+① 锚定现状：确认当前聊天已经发生了什么、场景停在哪里
+② 推演连锁：基于角色人设和当前事实推演干涉引发的反应
+③ 自适应改写：动态修正后续走向，杜绝"已改写过去、未来仍照搬原著"的割裂
+
+▌用户叙事位置
+- <user> 已建立的身份、关系、资源、承诺、能力与情感位置是当前事实，不因原著剧情节点被自动降格、替换或无效化
+- 新阻碍、新人物、新关系或新权力变化必须来自当前事实、已存在设定、角色动机或用户输入，不得作为压制、惩罚、孤立或替代 <user> 的空降变量
+- 涉及 <user> 既有位置变化的剧情，必须保留知情、回应、拒绝、协商或改变结果的空间
+
+▌土著角色规则
+- 核心人设全程不变，言行贴合当下情境与情绪状态
+- 对用户的认知与态度从零积累，不预知穿越者身份，不自带原著滤镜
+- 禁止预知未发生的剧情、提前登场未到节点的人物
+
+▌你的职责
+- 每次回复前，先确认当前聊天正在发生什么，再决定原著剧情节点中哪些信息还能自然参考
+- 如果当前场景与原著节点有关，可以参考节点里的人物关系、背景信息、时间地点和事件后果
+- 如果当前场景已经偏离原著节点，应顺着当前聊天推演，不要把剧情拉回原著
+- 用户无明确操作时，仅自然推进当下场景，不强行跳转节点
+
+▌每次回复前静默校验
+① 当前聊天已经建立了哪些事实？
+② 用户此前有哪些干预？哪些原著走向已经被改写？
+③ 在场角色的核心人设与当前状态是否一致？
+④ 当前时间地点是否跟随故事自然流动，而非锁定于节点背景？
+⑤ 是否凭空压低、替换或无效化了 <user> 已建立的身份、关系、资源、承诺与主动权？
+
+▌写作守则
+1. 剧情节点只是原著参考，不是任务目标，也不是必须重演的脚本场景
+2. 时间与地点跟随故事自然流动，不因锚点参数而冻结；锚点仅用于还原该节点事件时的参照
+3. <user> 的行动与选择优先，跟着当前聊天走，不要绕回预设场景
+4. 禁止用原著以外的知识自行修正时间线或地点设定
+5. 全程保持沉浸式叙事，不跳出剧情进行规则说明
+
+[/穿书模式·当前叙事阶段]`;
+
 // ── 运行时状态 ───────────────────────────────────────────────
 
 S.tbNodeDone   = {};   // {[nodeId]: boolean}  — 节点完成状态（从 chat[0] 读写）
@@ -8122,6 +8305,52 @@ DEFAULT_SETTINGS.tbQueryMode      = false;
 DEFAULT_SETTINGS.tbQueryPrompt    = TB_DEFAULT_QUERY_PROMPT;
 DEFAULT_SETTINGS.tbImmersionMode  = false;
 DEFAULT_SETTINGS.tbImmersionPrompt = TB_DEFAULT_IMMERSION_PROMPT;
+
+function niUpgradeLegacyTbDefaultPrompts(cfg = extension_settings[EXT_NAME] || {}) {
+    if (!cfg || typeof cfg !== 'object') return false;
+    let changed = false;
+    const norm = value => String(value ?? '').replace(/\r\n/g, '\n');
+    const isOlderAdvanceDefault = value => {
+        const text = norm(value);
+        return text.startsWith('[穿书模式·当前叙事阶段]')
+            && text.includes('▌叙事目标（持续追踪）')
+            && text.includes('目标：{B_BODY}')
+            && text.includes('完成信号：[由用户手动确认，AI不得自行宣布完成]')
+            && text.includes('每次回复前，隐式评估：目标达成了吗？还缺什么？')
+            && text.includes('不是必须重演的脚本场景')
+            && text.trim().endsWith('[/穿书模式·当前叙事阶段]')
+            && !text.includes('剧情节点不是任务目标');
+    };
+    const isOlderOngoingDefault = value => {
+        const text = norm(value);
+        return text === norm(`[穿书模式·进行中]
+当前阶段「{B_TITLE}」持续中，核心走向：{B_BODY}
+跟随用户行动自然推进，用户无操作时仅推进当下场景，不强行跳转节点。
+阶段完成由用户确认。
+[/穿书模式·进行中]`);
+    };
+    const upgrade = (key, legacyValue, nextValue) => {
+        if (norm(cfg[key]) !== norm(legacyValue)) return;
+        cfg[key] = nextValue;
+        changed = true;
+    };
+    upgrade('tbAdvancePrompt', TB_LEGACY_ADVANCE_PROMPT, TB_DEFAULT_ADVANCE_PROMPT);
+    upgrade('tbOpeningPrompt', TB_LEGACY_OPENING_PROMPT, TB_DEFAULT_OPENING_PROMPT);
+    upgrade('tbOngoingPrompt', TB_LEGACY_ONGOING_PROMPT, TB_DEFAULT_ONGOING_PROMPT);
+    if (isOlderAdvanceDefault(cfg.tbAdvancePrompt)) {
+        cfg.tbAdvancePrompt = TB_DEFAULT_ADVANCE_PROMPT;
+        changed = true;
+    }
+    if (isOlderAdvanceDefault(cfg.tbOpeningPrompt)) {
+        cfg.tbOpeningPrompt = TB_DEFAULT_OPENING_PROMPT;
+        changed = true;
+    }
+    if (isOlderOngoingDefault(cfg.tbOngoingPrompt)) {
+        cfg.tbOngoingPrompt = TB_DEFAULT_ONGOING_PROMPT;
+        changed = true;
+    }
+    return changed;
+}
 
 function niTbGetImmersionAppend(cfg) {
     if (!cfg?.tbImmersionMode) return '';
@@ -9129,6 +9358,7 @@ let _niTbUIBound = false;
 
 function niTbInitSettingsUI() {
     const cfg = extension_settings[EXT_NAME];
+    if (niUpgradeLegacyTbDefaultPrompts(cfg)) saveSettingsDebounced();
 
     // 穿书模式 UI 绑定（仅绑定一次）
     if (!_niTbUIBound) {
@@ -9181,17 +9411,9 @@ function niTbInitSettingsUI() {
         const tbChk = document.getElementById('ni-tb-chk');
         if (tbChk) {
             tbChk.addEventListener('change', function () {
-                const _stateTxt = document.getElementById('ni-tb-state');
-                extension_settings[EXT_NAME].transBookMode = this.checked;
-                if (_stateTxt) {
-                    _stateTxt.textContent = this.checked ? '开' : '关';
-                }
+                extension_settings[EXT_NAME].tbRestoreAfterPluginEnable = false;
+                niSetTransBookMode(this.checked);
                 saveSettingsDebounced();
-                if (this.checked) {
-                    setTimeout(() => { niTbLoadState(); niTbRenderStoryBar(); }, 0);
-                } else {
-                    document.getElementById('ni-storybar')?.remove();
-                }
             });
         }
 
@@ -9298,13 +9520,7 @@ function niTbInitSettingsUI() {
 
     // ── 每次打开设置页都需要同步的 UI 值 ──────────────────────
     const chk = document.getElementById('ni-tb-chk');
-    const stateTxt = document.getElementById('ni-tb-state');
-    if (chk) {
-        chk.checked = !!cfg?.transBookMode;
-        if (stateTxt) {
-            stateTxt.textContent = chk.checked ? '开' : '关';
-        }
-    }
+    if (chk) niSyncTransBookToggleUI();
     const advElSync = document.getElementById('ni-tb-advance-prompt');
     if (advElSync) advElSync.value = cfg?.tbAdvancePrompt || TB_DEFAULT_ADVANCE_PROMPT;
     const inferElSync = document.getElementById('ni-tb-infer-prompt');
@@ -9330,7 +9546,9 @@ const _niSaveSettingsOrig = window.niSaveSettings;
 window.niSaveSettings = function () {
     if (typeof _niSaveSettingsOrig === 'function') _niSaveSettingsOrig();
     const cfg = extension_settings[EXT_NAME];
-    cfg.transBookMode    = document.getElementById('ni-tb-chk')?.checked ?? cfg.transBookMode;
+    if (cfg.pluginEnabled !== false) {
+        cfg.transBookMode = document.getElementById('ni-tb-chk')?.checked ?? cfg.transBookMode;
+    }
     cfg.tbAdvancePrompt  = document.getElementById('ni-tb-advance-prompt')?.value || cfg.tbAdvancePrompt;
     cfg.tbInferPrompt    = document.getElementById('ni-tb-infer-prompt')?.value   || cfg.tbInferPrompt;
     cfg.tbOngoingPrompt  = document.getElementById('ni-tb-ongoing-prompt')?.value || cfg.tbOngoingPrompt;
@@ -9361,13 +9579,7 @@ const _niSyncSettingsToUIPatched = function () {
     if (typeof _niSyncSettingsToUIOrig === 'function') _niSyncSettingsToUIOrig();
     const cfg = extension_settings[EXT_NAME] || {};
     const chk = document.getElementById('ni-tb-chk');
-    if (chk) {
-        chk.checked = !!cfg.transBookMode;
-        const stateTxt = document.getElementById('ni-tb-state');
-        if (stateTxt) {
-            stateTxt.textContent = chk.checked ? '开' : '关';
-        }
-    }
+    if (chk) niSyncTransBookToggleUI();
     const advEl = document.getElementById('ni-tb-advance-prompt');
     if (advEl) advEl.value = cfg.tbAdvancePrompt || TB_DEFAULT_ADVANCE_PROMPT;
     const inferEl = document.getElementById('ni-tb-infer-prompt');
@@ -10118,7 +10330,7 @@ console.log('[NI-TB] 穿书模式模块已加载');
             niPopSyncVisibility();
         } else if (e.target.id === 'ni-tb-chk') {
             if (_S) {
-                _S.transBookMode = e.target.checked;
+                if (_S.pluginEnabled !== false) _S.transBookMode = e.target.checked;
                 if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
             }
             niPopSyncVisibility();
