@@ -692,7 +692,7 @@ async function dbOpen() {
 }
 
 // 写入时将 vector 转为 ArrayBuffer 二进制，同时记录 fingerprint
-async function dbSaveChunk(stageIdx, chunkIdx, vector, text) {
+async function dbSaveChunk(stageIdx, chunkIdx, vector, text, meta = {}) {
     await dbOpen();
     const key = `${S.novelKey}_s${stageIdx}_c${chunkIdx}`;
     const fingerprint = getVectorFingerprint();
@@ -703,6 +703,7 @@ async function dbSaveChunk(stageIdx, chunkIdx, vector, text) {
             novelKey: S.novelKey,
             stageIdx,
             chunkIdx,
+            sourceChunkIdx: meta.sourceChunkIdx ?? chunkIdx,
             vector: vecToBuffer(vector),   // ← 二进制存储
             text,
             fingerprint,
@@ -4542,7 +4543,7 @@ async function niStartVec() {
     // 将压缩稿按阶段分组（只处理选中阶段）
     // 方案B：优先用 chunkStageMap（realChunkIdx -> Set<stageIdx>），
     // 保证边界 chunk 被同时放入相邻两个阶段；若未生成则退回旧逻辑。
-    const stageBuckets = {}; // { [stageIdx]: Array<string> }
+    const stageBuckets = {}; // { [stageIdx]: Array<{text, sourceChunkIdx}> }
     for (let i = 0; i < S.chunkStatus.length; i++) {
         if (S.chunkStatus[i] !== 'done') continue;
         const vecText = (S.chunkResults[i] && S.chunkResults[i].trim())
@@ -4566,7 +4567,7 @@ async function niStartVec() {
             if (!selectedStages.has(si)) continue;
             if (!stageBuckets[si]) stageBuckets[si] = [];
             const subChunks = splitText(vecText, 500);
-            stageBuckets[si].push(...subChunks);
+            stageBuckets[si].push(...subChunks.map(text => ({ text, sourceChunkIdx: i })));
         }
     }
 
@@ -4590,16 +4591,18 @@ async function niStartVec() {
     const _failedChunks = []; // 记录失败的具体 chunk，供「补全缺失」使用
     for (const si of stageIdxList) {
         if (titleNote2) titleNote2.textContent = `正在向量化第 ${si}/${stageN} 阶段…`;
-        const texts = stageBuckets[si];
-        for (let ci = 0; ci < texts.length; ci++) {
+        const items = stageBuckets[si];
+        for (let ci = 0; ci < items.length; ci++) {
             try {
-                const vec = await embedText(texts[ci]);
-                await dbSaveChunk(si, ci, vec, texts[ci]);
+                const item = typeof items[ci] === 'string' ? { text: items[ci], sourceChunkIdx: ci } : items[ci];
+                const vec = await embedText(item.text);
+                await dbSaveChunk(si, ci, vec, item.text, { sourceChunkIdx: item.sourceChunkIdx });
             } catch (e) {
                 console.error(`[NI] 向量化失败 stage=${si} chunk=${ci}:`, e);
                 stageFailCount[si] = (stageFailCount[si] || 0) + 1;
                 stageErrorMsgs[si] = e.message || String(e);
-                _failedChunks.push({ si, ci, text: texts[ci] });
+                const item = typeof items[ci] === 'string' ? { text: items[ci], sourceChunkIdx: ci } : items[ci];
+                _failedChunks.push({ si, ci, text: item.text, sourceChunkIdx: item.sourceChunkIdx });
             }
             totalDone++;
             if (titleBar2) titleBar2.style.width = `${Math.round((totalDone / totalChunks) * 95)}%`;
@@ -4709,17 +4712,18 @@ async function niVecFillMissing() {
         for (const si of assignedStages) {
             if (!stageBuckets[si]) stageBuckets[si] = [];
             const subChunks = splitText(vecText, 500);
-            stageBuckets[si].push(...subChunks);
+            stageBuckets[si].push(...subChunks.map(text => ({ text, sourceChunkIdx: i })));
         }
     }
 
     // 3. 对比：找出 IndexedDB 里没有的 chunk
-    const missingChunks = []; // { si, ci, text }
-    for (const [siStr, texts] of Object.entries(stageBuckets)) {
+    const missingChunks = []; // { si, ci, text, sourceChunkIdx }
+    for (const [siStr, items] of Object.entries(stageBuckets)) {
         const si = Number(siStr);
-        for (let ci = 0; ci < texts.length; ci++) {
+        for (let ci = 0; ci < items.length; ci++) {
             if (!existingKeys.has(`s${si}_c${ci}`)) {
-                missingChunks.push({ si, ci, text: texts[ci] });
+                const item = typeof items[ci] === 'string' ? { text: items[ci], sourceChunkIdx: ci } : items[ci];
+                missingChunks.push({ si, ci, text: item.text, sourceChunkIdx: item.sourceChunkIdx });
             }
         }
     }
@@ -4739,13 +4743,13 @@ async function niVecFillMissing() {
     const stillFailed = [];
     const stageFailCount2 = {};
 
-    for (const { si, ci, text } of missingChunks) {
+    for (const { si, ci, text, sourceChunkIdx } of missingChunks) {
         try {
             const vec = await embedText(text);
-            await dbSaveChunk(si, ci, vec, text);
+            await dbSaveChunk(si, ci, vec, text, { sourceChunkIdx: sourceChunkIdx ?? ci });
         } catch (e) {
             console.error(`[NI] 补全失败 stage=${si} chunk=${ci}:`, e);
-            stillFailed.push({ si, ci, text });
+            stillFailed.push({ si, ci, text, sourceChunkIdx });
             stageFailCount2[si] = (stageFailCount2[si] || 0) + 1;
         }
         done++;
@@ -4862,11 +4866,79 @@ function extractMesText(mes, tag) {
 // ============================================================
 // 向量召回
 // ============================================================
+
+function niNormalizeRecallText(text) {
+    return String(text || '').replace(/\r\n/g, '\n').trim();
+}
+
+function niBuildTbLightRecallContext(curNode) {
+    if (!curNode) return null;
+    const anchorChunkIdx = Number.isFinite(Number(curNode._chunkIdx)) ? Number(curNode._chunkIdx) : null;
+    return {
+        anchorChunkIdx,
+        stageIdx: Number(curNode.stageIdx) || null,
+        title: (curNode.title || '').trim(),
+        time: (curNode.time || '').trim(),
+        location: (curNode.location || '').trim(),
+    };
+}
+
+function niGetVectorSourceChunkIdx(chunk) {
+    const n = Number(chunk?.sourceChunkIdx);
+    return Number.isFinite(n) ? n : null;
+}
+
+function niTbLightRecallCandidateAllowed(chunk, lightCtx) {
+    if (!lightCtx) return true;
+    const sourceChunkIdx = niGetVectorSourceChunkIdx(chunk);
+    if (sourceChunkIdx == null || lightCtx.anchorChunkIdx == null) return true;
+    return sourceChunkIdx <= lightCtx.anchorChunkIdx;
+}
+
+function niSplitRecallSections(text) {
+    return niNormalizeRecallText(text)
+        .split(/\n\s*---\s*\n/g)
+        .map(s => s.trim())
+        .filter(Boolean);
+}
+
+function niFindTbLightRecallAnchor(text, lightCtx) {
+    const anchors = [lightCtx?.time, lightCtx?.title]
+        .map(v => String(v || '').trim())
+        .filter(v => v.length >= 2);
+    for (const anchor of anchors) {
+        const idx = text.indexOf(anchor);
+        if (idx >= 0) return { idx, length: anchor.length };
+    }
+    return null;
+}
+
+function niTbCutSectionAtFutureTime(section, lightCtx) {
+    const text = niNormalizeRecallText(section);
+    const anchor = niFindTbLightRecallAnchor(text, lightCtx);
+    if (!anchor) return text;
+
+    const afterAnchor = text.slice(anchor.idx + anchor.length);
+    const futureTimeMatch = afterAnchor.match(/\n\s*(?:时间[:：]\s*)?(?:第[一二三四五六七八九十百千万\d]+[章节回幕]|[一二三四五六七八九十〇零\d]+年(?:[一二三四五六七八九十〇零\d]+月)?(?:[一二三四五六七八九十〇零\d]+日)?|[一二三四五六七八九十〇零\d]+月[一二三四五六七八九十〇零\d]+日|翌日|次日|同日|当日|当夜|入夜|清晨|黄昏|午后|傍晚|深夜|第二天|第三天|数日后|几日后|不久后)[^\n]{0,40}/);
+    if (!futureTimeMatch || futureTimeMatch.index == null) return text;
+    const cutAt = anchor.idx + anchor.length + futureTimeMatch.index;
+    return text.slice(0, cutAt).trim();
+}
+
+function niApplyTbLightRecallCut(text, lightCtx) {
+    if (!lightCtx) return text;
+    const sections = niSplitRecallSections(text)
+        .map(section => niTbCutSectionAtFutureTime(section, lightCtx))
+        .filter(Boolean);
+    return sections.join('\n\n---\n\n');
+}
+
 // 加权向量召回：接收 [{text, weight}, ...] 批量 embedding，指数衰减加权合并后召回
-async function recallRelevantWeighted(weightedQueries, stageList) {
+async function recallRelevantWeighted(weightedQueries, stageList, opts = {}) {
     const cfg = extension_settings[EXT_NAME];
     const topK   = cfg.recallTopK  ?? DEFAULT_SETTINGS.recallTopK;
     const thresh = cfg.recallThresh ?? DEFAULT_SETTINGS.recallThresh;
+    const lightCtx = opts.lightRecallContext || null;
 
     const enabledStages = stageList
         ? new Set(stageList)
@@ -4910,13 +4982,14 @@ async function recallRelevantWeighted(weightedQueries, stageList) {
 
     const candidates = allChunks
         .filter(c => enabledStages.has(c.stageIdx))
+        .filter(c => niTbLightRecallCandidateAllowed(c, lightCtx))
         .map(c => ({ ...c, score: cosineSim(combined, c.vector) }))
         .filter(c => c.score >= thresh)
         .sort((a, b) => b.score - a.score)
         .slice(0, topK);
 
     if (!candidates.length) return '';
-    return candidates.map(c => c.text).join('\n\n---\n\n');
+    return niApplyTbLightRecallCut(candidates.map(c => c.text).join('\n\n---\n\n'), lightCtx);
 }
 
 async function recallRelevant(queryText, stageList) {
@@ -5346,6 +5419,9 @@ async function onPromptReady(eventData) {
         const curTbNode = (extension_settings[EXT_NAME]?.transBookMode)
             ? (niGetTbNodes()[S.tbCurIdx] || null)
             : null;
+        const lightRecallContext = (extension_settings[EXT_NAME]?.transBookMode && extension_settings[EXT_NAME]?.tbLightRecallMode)
+            ? niBuildTbLightRecallContext(curTbNode)
+            : null;
         const nodeContext = curTbNode
             ? `【当前剧情节点】${curTbNode.title} 时间：${curTbNode.time || '未知'} 地点：${curTbNode.location || '未知'}\n`
             : '';
@@ -5368,7 +5444,7 @@ async function onPromptReady(eventData) {
 
         if (weightedQueries.length) {
             try {
-                const recallText = await recallRelevantWeighted(weightedQueries, vecStages);
+                const recallText = await recallRelevantWeighted(weightedQueries, vecStages, { lightRecallContext });
                 if (recallText.trim()) {
                     const vecContent = `[小说原著相关片段·向量召回]\n${recallText}\n[/小说原著相关片段·向量召回]`;
                     doInject(`${EXT_NAME}_vec`, vecContent, vecPos, vecDepth, vecRole);
@@ -6138,7 +6214,7 @@ async function niExportData() {
         (a.stageIdx - b.stageIdx) || (a.chunkIdx - b.chunkIdx)
     );
     const chunksJsonl = sortedChunks.map(c => JSON.stringify({
-        key: c.key, stageIdx: c.stageIdx, chunkIdx: c.chunkIdx, text: c.text,
+        key: c.key, stageIdx: c.stageIdx, chunkIdx: c.chunkIdx, sourceChunkIdx: c.sourceChunkIdx, text: c.text,
     })).join('\n');
     const vectorsOrdered = sortedChunks.map(c => c.vector || []);
 
@@ -6307,6 +6383,7 @@ async function niImportData(file) {
                                 novelKey: importedKey,
                                 stageIdx: meta.stageIdx,
                                 chunkIdx: meta.chunkIdx,
+                                sourceChunkIdx: meta.sourceChunkIdx ?? meta.chunkIdx,
                                 text: meta.text,
                                 vector: vecToBuffer(vectors[i]),
                                 fingerprint,
@@ -8303,6 +8380,7 @@ DEFAULT_SETTINGS.tbOpeningPrompt  = TB_DEFAULT_OPENING_PROMPT;
 DEFAULT_SETTINGS.tbOngoingPrompt  = TB_DEFAULT_ONGOING_PROMPT;
 DEFAULT_SETTINGS.tbQueryMode      = false;
 DEFAULT_SETTINGS.tbQueryPrompt    = TB_DEFAULT_QUERY_PROMPT;
+DEFAULT_SETTINGS.tbLightRecallMode = false;
 DEFAULT_SETTINGS.tbImmersionMode  = false;
 DEFAULT_SETTINGS.tbImmersionPrompt = TB_DEFAULT_IMMERSION_PROMPT;
 
@@ -9510,6 +9588,11 @@ function niTbInitSettingsUI() {
             saveSettingsDebounced();
         });
 
+        document.getElementById('ni-tb-light-recall-mode')?.addEventListener('change', function () {
+            extension_settings[EXT_NAME].tbLightRecallMode = this.checked;
+            saveSettingsDebounced();
+        });
+
         document.getElementById('ni-tb-immersion-mode')?.addEventListener('change', function () {
             extension_settings[EXT_NAME].tbImmersionMode = this.checked;
             saveSettingsDebounced();
@@ -9529,6 +9612,8 @@ function niTbInitSettingsUI() {
     if (ongoingElSync) ongoingElSync.value = cfg?.tbOngoingPrompt || TB_DEFAULT_ONGOING_PROMPT;
     const queryElSync = document.getElementById('ni-tb-query-prompt');
     if (queryElSync) queryElSync.value = cfg?.tbQueryPrompt || TB_DEFAULT_QUERY_PROMPT;
+    const lightRecallModeChk = document.getElementById('ni-tb-light-recall-mode');
+    if (lightRecallModeChk) lightRecallModeChk.checked = !!cfg?.tbLightRecallMode;
     const immersionElSync = document.getElementById('ni-tb-immersion-prompt');
     if (immersionElSync) immersionElSync.value = cfg?.tbImmersionPrompt || TB_DEFAULT_IMMERSION_PROMPT;
     const statusbarChk = document.getElementById('ni-tb-display-statusbar');
@@ -9556,6 +9641,7 @@ window.niSaveSettings = function () {
     cfg.tbDisplayPopup     = document.getElementById('ni-tb-display-popup')?.checked     ?? cfg.tbDisplayPopup;
     cfg.tbQueryMode        = document.getElementById('ni-tb-query-mode')?.checked ?? cfg.tbQueryMode;
     cfg.tbQueryPrompt      = document.getElementById('ni-tb-query-prompt')?.value  || cfg.tbQueryPrompt;
+    cfg.tbLightRecallMode  = document.getElementById('ni-tb-light-recall-mode')?.checked ?? cfg.tbLightRecallMode;
     cfg.tbImmersionMode    = document.getElementById('ni-tb-immersion-mode')?.checked ?? cfg.tbImmersionMode;
     cfg.tbImmersionPrompt  = document.getElementById('ni-tb-immersion-prompt')?.value || cfg.tbImmersionPrompt || TB_DEFAULT_IMMERSION_PROMPT;
     // 开关开启时自动将 ni_query 追加到 vecMsgTag，关闭时移除
@@ -9594,6 +9680,8 @@ const _niSyncSettingsToUIPatched = function () {
     if (queryModeChk) queryModeChk.checked = !!cfg.tbQueryMode;
     const queryPromptEl = document.getElementById('ni-tb-query-prompt');
     if (queryPromptEl) queryPromptEl.value = cfg.tbQueryPrompt || TB_DEFAULT_QUERY_PROMPT;
+    const lightRecallModeChkSync = document.getElementById('ni-tb-light-recall-mode');
+    if (lightRecallModeChkSync) lightRecallModeChkSync.checked = !!cfg.tbLightRecallMode;
     const immersionModeChkSync = document.getElementById('ni-tb-immersion-mode');
     if (immersionModeChkSync) immersionModeChkSync.checked = !!cfg.tbImmersionMode;
     const immersionPromptEl = document.getElementById('ni-tb-immersion-prompt');

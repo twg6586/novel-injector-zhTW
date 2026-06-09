@@ -514,6 +514,22 @@
         <!-- 设置面板 -->
         <div class="ni-api-panel" id="ni-tb-cfg-panel">
           <div class="ni-field" style="margin-bottom:0">
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <label style="display:flex;align-items:center;gap:5px">
+                <i class="ti ti-filter" style="font-size:12px"></i>轻量化召回
+                <span style="font-size:10px;color:var(--color-text-secondary);font-weight:400">按当前节点裁切未来内容</span>
+              </label>
+              <label class="ni-toggle-wrap">
+                <input type="checkbox" id="ni-tb-light-recall-mode">
+                <span class="ni-cfg-chk"><i class="ti ti-check"></i></span>
+              </label>
+            </div>
+            <div style="font-size:11px;color:var(--color-text-secondary);margin-top:6px;line-height:1.6">
+              ① 开启后，向量召回会以当前快穿节点的时间、标题和所在段落为锚点，优先保留节点附近的压缩原文。<br>
+              ② 明显晚于当前节点的后续段落会被裁掉，减少剧透和剧情抢跑；不会重新向量化，也不会修改原文数据。
+            </div>
+          </div>
+          <div class="ni-field" style="margin-top:10px;margin-bottom:0">
             <label style="margin-bottom:8px"><i class="ti ti-layout-list" style="font-size:12px;margin-right:4px;vertical-align:-1px"></i>剧情进度显示方式</label>
             <div style="display:flex;align-items:center;gap:16px">
               <label class="ni-toggle-label">
