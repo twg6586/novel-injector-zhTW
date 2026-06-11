@@ -104,7 +104,7 @@
   border-color: #888 !important;
 }
 .ni-app.ni-borderless .ni-book-card.ni-book-card-active {
-  border-color: rgba(160, 68, 94, .8) !important;
+  border-color: var(--ni-primary) !important;
 }
 .ni-app.ni-borderless .ni-tl-dot {
   border-color: #fff !important;
