@@ -65,6 +65,10 @@ const DB_NAME = 'NovelInjectorVectors';
 const DB_VERSION = 2;
 const DB_STORE = 'chunks';
 
+const TAVERN_TASK_SWITCH_PROMPT = `当你收到 Novel Injector 的清洗、总结、结构化整理、提取角色/剧情/文风/阶段/世界设定等任务指令时，不再遵守当前角色扮演、续写、对话、旁白、扮演身份或酒馆预设里的输出格式，转为工具任务格式。
+本次请求不是 RP 任务，不要以角色身份回应，不要推进剧情，不要和用户对话，不要加入寒暄、解释、免责声明或 Markdown 代码块。
+只根据本次任务要求处理提供的小说文本/上下文，并严格遵守任务中指定的输出结构、标签和 JSON 字段；如果任务要求输出 ni_meta、JSON 或固定标题结构，必须只输出该结构。`;
+
 // 清洗提示词
 const CLEAN_PROMPT = `小说分阶段精准压缩
 
@@ -548,6 +552,7 @@ const DEFAULT_SETTINGS = {
     plotInjDepth: 4,
     plotInjRole: 0,
     rawInjMode: "nodes",  // "nodes"=剧情节点 | "compressed"=压缩原文
+    globalPromptSource: 'builtin', // builtin=内置提示词 tavern=跟随酒馆主预设 none=不使用
     globalPrompt: GLOBAL_PROMPT,
     globalTailPrompt: GLOBAL_TAIL_PROMPT,
     globalHeadInjPos: 2,
@@ -878,6 +883,7 @@ function niLoadSettings() {
                     q('#ni-st-chunks') && (q('#ni-st-chunks').textContent = S.chunkStatus.length);
                     renderChunkList();
                 }
+                niSyncCleanButtonState();
                 renderPlots(); renderCharacters(); buildStages(); niRenderWorldSettings();
             }
             // Bug修复④：启动拉取重数据后刷新文风 UI（异步加载完成才有 styleGuide）
@@ -1145,6 +1151,15 @@ function niSaveSettings() {
     cfg.customPrompt    = q('#ni-pt-content')?.value || CLEAN_PROMPT;
     cfg.roleplayPrompt  = q('#ni-stage-pt-content')?.value || extension_settings[EXT_NAME]?.roleplayPrompt || ROLEPLAY_PROMPT;
     cfg.roleplayEnabled = q('#ni-stage-pt-enabled')?.checked ?? (extension_settings[EXT_NAME]?.roleplayEnabled !== false);
+    if (q('#ni-global-source-tavern')?.checked) {
+        cfg.globalPromptSource = 'tavern';
+    } else if (q('#ni-global-source-builtin')?.checked) {
+        cfg.globalPromptSource = 'builtin';
+    } else if (q('#ni-global-source-none')?.checked) {
+        cfg.globalPromptSource = 'none';
+    } else {
+        cfg.globalPromptSource = niNormalizeGlobalPromptSource(cfg.globalPromptSource);
+    }
     const _gp = q('#ni-global-pt-content')?.value;
     cfg.globalPrompt = (_gp && _gp.trim()) ? _gp : (extension_settings[EXT_NAME]?.globalPrompt ?? GLOBAL_PROMPT);
     cfg.globalTailPrompt = q('#ni-global-tail-pt-content')?.value ?? (extension_settings[EXT_NAME]?.globalTailPrompt ?? GLOBAL_TAIL_PROMPT);
@@ -1263,6 +1278,7 @@ function syncSettingsToUI() {
     if (globalPtEl) globalPtEl.value = cfg.globalPrompt ?? GLOBAL_PROMPT;
     const globalTailPtEl = q('#ni-global-tail-pt-content');
     if (globalTailPtEl) globalTailPtEl.value = cfg.globalTailPrompt ?? GLOBAL_TAIL_PROMPT;
+    niSyncGlobalPromptSourceUI(cfg);
     // 同步限速队列上限
     _apiQueue.maxPerMin = cfg.apiRateLimit ?? DEFAULT_SETTINGS.apiRateLimit;
     _vecQueue.maxPerMin = cfg.vecRateLimit ?? DEFAULT_SETTINGS.vecRateLimit;
@@ -1350,6 +1366,7 @@ function niToggleGlobalPrompt() {
         if (el) el.value = extension_settings[EXT_NAME]?.globalPrompt ?? GLOBAL_PROMPT;
         const tailEl = q('#ni-global-tail-pt-content');
         if (tailEl) tailEl.value = extension_settings[EXT_NAME]?.globalTailPrompt ?? GLOBAL_TAIL_PROMPT;
+        niSyncGlobalPromptSourceUI(extension_settings[EXT_NAME] || {});
     }
 }
 window.niToggleGlobalPrompt = niToggleGlobalPrompt;
@@ -1481,7 +1498,7 @@ function niApplyFile(f) {
 
         renderChunkList();
         niStylePopulateChunkSel();
-        setBtn('#ni-btn-clean', false);
+        niSyncCleanButtonState();
         // 只持久化文件相关状态，不触碰向量状态（避免覆盖已有的 stageVecDone/vecDone）
         cfg._novelKey   = S.novelKey;
         cfg._cleanDone  = S.cleanDone;
@@ -1534,6 +1551,7 @@ function niOnKbChange() {
         q('#ni-st-chunks').textContent = S.chunks.length;
         renderChunkList();
         niStylePopulateChunkSel();
+        niSyncCleanButtonState();
         niSaveSettings();
     }, 400);
 }
@@ -1613,8 +1631,84 @@ async function withSemaphore(fn) {
     finally { ApiSemaphore.release(); }
 }
 
+function niNormalizeGlobalPromptSource(value) {
+    if (value === 'none') return 'none';
+    return value === 'tavern' ? 'tavern' : 'builtin';
+}
+
+function niUseTavernGlobalPreset(cfg = extension_settings[EXT_NAME] || {}) {
+    return niNormalizeGlobalPromptSource(cfg.globalPromptSource) === 'tavern';
+}
+
+function niSyncGlobalPromptSourceUI(cfg = extension_settings[EXT_NAME] || {}) {
+    const source = niNormalizeGlobalPromptSource(cfg.globalPromptSource);
+    const tavernEl = q('#ni-global-source-tavern');
+    const builtinEl = q('#ni-global-source-builtin');
+    const noneEl = q('#ni-global-source-none');
+    if (tavernEl) tavernEl.checked = source === 'tavern';
+    if (builtinEl) builtinEl.checked = source === 'builtin';
+    if (noneEl) noneEl.checked = source === 'none';
+    const builtinBox = q('#ni-global-builtin-box');
+    if (builtinBox) builtinBox.style.display = source === 'builtin' ? 'block' : 'none';
+}
+
+function niMessageContentToText(content) {
+    if (Array.isArray(content)) {
+        return content.map(part => {
+            if (typeof part === 'string') return part;
+            if (part && typeof part.text === 'string') return part.text;
+            return part ? JSON.stringify(part) : '';
+        }).filter(Boolean).join('\n');
+    }
+    if (content && typeof content === 'object') return JSON.stringify(content);
+    return String(content ?? '');
+}
+
+function niMessagesToTavernQuietPrompt(messages) {
+    const body = (Array.isArray(messages) ? messages : [])
+        .map(message => {
+            const role = String(message?.role || 'user').toUpperCase();
+            const content = niMessageContentToText(message?.content).trim();
+            return content ? `[${role}]\n${content}` : '';
+        })
+        .filter(Boolean)
+        .join('\n\n');
+    return [`[SYSTEM]\n${TAVERN_TASK_SWITCH_PROMPT}`, body]
+        .filter(Boolean)
+        .join('\n\n');
+}
+
+async function niGenerateWithTavernMainPreset(messages, { responseLength = null } = {}) {
+    const context = getContext?.();
+    const quietPrompt = niMessagesToTavernQuietPrompt(messages);
+    if (!quietPrompt) throw new Error('酒馆主预设调用失败：提示词内容为空');
+
+    let result = '';
+    if (typeof context?.generateQuietPrompt === 'function') {
+        result = await context.generateQuietPrompt({
+            quietPrompt,
+            quietToLoud: false,
+            skipWIAN: false,
+            responseLength,
+            trimToSentence: false,
+        });
+    } else if (typeof context?.generate === 'function') {
+        result = await context.generate('quiet', {
+            quiet_prompt: quietPrompt,
+            quietToLoud: false,
+            skipWIAN: false,
+        });
+    } else {
+        throw new Error('酒馆主预设调用失败：当前酒馆版本未提供生成接口');
+    }
+
+    if (typeof result === 'string' && result.trim()) return result.trim();
+    throw new Error('酒馆主预设调用失败：返回内容为空');
+}
+
 function niApplyGlobalPromptsToMessages(messages, cfg = extension_settings[EXT_NAME] || {}) {
     let next = Array.isArray(messages) ? [...messages] : [];
+    if (niNormalizeGlobalPromptSource(cfg.globalPromptSource) !== 'builtin') return next;
     const headText = (cfg?.globalPrompt ?? GLOBAL_PROMPT).trim();
     const tailText = (cfg?.globalTailPrompt ?? GLOBAL_TAIL_PROMPT).trim();
     if (headText) {
@@ -1674,6 +1768,9 @@ function niInsertGlobalPromptMessage(messages, content, { pos, depth, role, pref
 async function callCleanApi(messages) {
     const cfg = extension_settings[EXT_NAME];
     const useStream = cfg.cleanStream ?? true;
+    if (niUseTavernGlobalPreset(cfg)) {
+        return withSemaphore(() => niGenerateWithTavernMainPreset(messages, { responseLength: 32000 }));
+    }
     messages = niApplyGlobalPromptsToMessages(messages, cfg);
 
     const body = {
@@ -1785,8 +1882,26 @@ async function callCleanApi(messages) {
 // ============================================================
 // 清洗主流程
 // ============================================================
-async function niStartClean() {
+async function niStartClean(options = {}) {
     if (!S.fileLoaded || S.cleanRunning) return;
+    const restart = options.restart === true;
+
+    if (restart) {
+        niResetCleanRuntimeForRestart();
+    } else {
+        niNormalizeCleanArraysToChunks();
+        const beforeStats = niCleanProgressStats();
+        if (beforeStats.done > 0 && !niHasLoadedChunks()) {
+            const ok = await niEnsureChunksLoaded();
+            if (!ok || !niHasLoadedChunks()) {
+                alert('无法加载已完成段的压缩正文。请确认服务端数据文件存在，或左键重新清洗。');
+                niSyncCleanButtonState();
+                return;
+            }
+            niNormalizeCleanArraysToChunks();
+        }
+    }
+
     S.cleanRunning = true;
     S.stopClean = false;
     S.skipCurrentChunk = false;
@@ -1809,7 +1924,7 @@ async function niStartClean() {
     if (cpCard) cpCard.classList.add('ni-has-prog');
 
     // 重置：仅在全新清洗时清空；续跑时保留已有数据
-    const isResume = S.chunkStatus.some(s => s === 'done');
+    const isResume = !restart && S.chunkStatus.some(s => s === 'done');
     if (!isResume) {
         S.characters = [];
         S.plots = { main: [], sub: [], pivot: [] };
@@ -1924,19 +2039,14 @@ async function niStartClean() {
         titleNote.classList.toggle('g', !hasError);
     }
 
-    setBtn('#ni-btn-clean', false, '<i class="ti ti-check"></i>清洗完成');
-
-    if (S.stopClean) {
-        // 用户暂停了，大按钮变为"续跑清洗"，不显示额外按钮
-        setBtn('#ni-btn-clean', false, '<i class="ti ti-player-play"></i>续跑清洗');
-    } else if (hasError) {
-        setBtn('#ni-btn-clean', false, '<i class="ti ti-check"></i>清洗完成');
+    if (hasError) {
         q('#ni-btn-retry').style.display = 'flex';
         q('#ni-btn-retry').innerHTML = '<i class="ti ti-refresh"></i>重试失败分段';
     }
 
     S.cleanDone = doneCount > 0;
     S.cleanRunning = false;
+    niSyncCleanButtonState();
 
     if (S.cleanDone) {
         // 重试后按 chunkIndex 重新排序，防止乱序
@@ -2046,6 +2156,7 @@ async function niRunSingleChunk(i) {
         setChunkStat(i, 'error');
     }
     S.cleanRunning = false;
+    niSyncCleanButtonState();
 }
 window.niRunSingleChunk = niRunSingleChunk;
 
@@ -3952,6 +4063,10 @@ async function callApiSeq(messages) {
     await _apiQueue.acquire();
     const cfg = extension_settings[EXT_NAME];
 
+    if (niUseTavernGlobalPreset(cfg)) {
+        return await niGenerateWithTavernMainPreset(messages, { responseLength: 1000 });
+    }
+
     messages = niApplyGlobalPromptsToMessages(messages, cfg);
 
     const useStream = cfg.cleanStream ?? true;
@@ -5593,6 +5708,130 @@ function setBtn(sel, disabled, html) {
     if (html !== undefined) el.innerHTML = html;
 }
 
+function niCleanProgressStats() {
+    const total = Array.isArray(S.chunks) && S.chunks.length
+        ? S.chunks.length
+        : (Array.isArray(S.chunkStatus) ? S.chunkStatus.length : 0);
+    let done = 0;
+    let error = 0;
+    let running = 0;
+    let pending = 0;
+    for (let i = 0; i < total; i++) {
+        const st = S.chunkStatus?.[i] || 'pending';
+        if (st === 'done') done++;
+        else if (st === 'error') error++;
+        else if (st === 'running') running++;
+        else pending++;
+    }
+    return {
+        total,
+        done,
+        error,
+        running,
+        pending,
+        hasAnyProgress: done > 0 || error > 0 || running > 0,
+        isPartial: total > 0 && done > 0 && done < total,
+        isComplete: total > 0 && done === total && error === 0 && running === 0,
+    };
+}
+
+function niHasPartialCleanProgress() {
+    return niCleanProgressStats().isPartial;
+}
+
+function niNormalizeCleanArraysToChunks() {
+    if (!Array.isArray(S.chunks)) S.chunks = [];
+    const total = S.chunks.length;
+    const valid = new Set(['pending', 'done', 'error']);
+    S.chunkStatus = S.chunks.map((_, i) => {
+        const st = S.chunkStatus?.[i] || 'pending';
+        return valid.has(st) ? st : 'pending';
+    });
+    S.chunkResults = S.chunks.map((_, i) => S.chunkResults?.[i] || '');
+    S.chunkMeta = S.chunks.map((_, i) => S.chunkMeta?.[i] || null);
+    return total;
+}
+
+function niSyncCleanProgressHint(stats = niCleanProgressStats()) {
+    if (S.cleanRunning) return;
+    const titleProg = q('#ni-cp-title-prog');
+    const titleBar  = q('#ni-cp-title-bar');
+    const titleNote = q('#ni-cp-title-note');
+    const cpCard    = q('#ni-cp-card');
+    if (!titleProg || !titleBar || !titleNote) return;
+
+    titleNote.classList.remove('g');
+    titleBar.classList.remove('g');
+    if (stats.isPartial) {
+        const failedText = stats.error ? `，${stats.error} 段失败` : '';
+        titleProg.style.display = 'flex';
+        cpCard?.classList.add('ni-has-prog');
+        titleNote.textContent = `已完成 ${stats.done}/${stats.total} 段${failedText}，左键重新，右键续跑`;
+        titleBar.style.width = `${Math.round((stats.done / stats.total) * 100)}%`;
+    } else if (stats.isComplete) {
+        titleProg.style.display = 'flex';
+        cpCard?.classList.add('ni-has-prog');
+        titleNote.textContent = `已完成 ${stats.total}/${stats.total} 段`;
+        titleNote.classList.add('g');
+        titleBar.style.width = '100%';
+        titleBar.classList.add('g');
+    } else {
+        titleProg.style.display = 'none';
+        cpCard?.classList.remove('ni-has-prog');
+        titleNote.textContent = '';
+        titleBar.style.width = '0%';
+    }
+}
+
+function niSyncCleanButtonState() {
+    const btn = q('#ni-btn-clean');
+    if (!btn) return;
+    const stats = niCleanProgressStats();
+    const disabled = !S.fileLoaded || S.cleanRunning || stats.total === 0;
+
+    if (stats.isPartial) {
+        setBtn('#ni-btn-clean', disabled, '<i class="ti ti-refresh"></i>重新清洗');
+        btn.title = `已完成 ${stats.done}/${stats.total} 段。左键重新清洗；右键续跑清洗。`;
+        btn.dataset.niPartialClean = '1';
+    } else if (stats.isComplete) {
+        setBtn('#ni-btn-clean', disabled, '<i class="ti ti-check"></i>清洗完成');
+        btn.title = `已完成 ${stats.total}/${stats.total} 段。`;
+        btn.dataset.niPartialClean = '0';
+    } else {
+        setBtn('#ni-btn-clean', disabled, '<i class="ti ti-player-play"></i>开始全自动清洗');
+        btn.title = '开始清洗当前小说';
+        btn.dataset.niPartialClean = '0';
+    }
+    niSyncCleanProgressHint(stats);
+}
+
+function niResetCleanRuntimeForRestart() {
+    niNormalizeCleanArraysToChunks();
+    S.characters = [];
+    S.plots = { main: [], sub: [], pivot: [] };
+    S.chunkStatus = S.chunks.map(() => 'pending');
+    S.chunkResults = S.chunks.map(() => '');
+    S.chunkMeta = S.chunks.map(() => null);
+    S.cleanDone = false;
+    S.stopClean = false;
+    S.skipCurrentChunk = false;
+    S.vecDone = false;
+    S.stageVecDone = {};
+    renderChunkList();
+    renderPlots();
+    renderCharacters();
+    buildStages();
+    setBtn('#ni-btn-vec', true, '<i class="ti ti-database"></i>开始向量化');
+}
+
+async function niHandleCleanButtonClick(restartOnPartial = true) {
+    if (niHasPartialCleanProgress() && restartOnPartial) {
+        await niStartClean({ restart: true });
+        return;
+    }
+    await niStartClean({ restart: false });
+}
+
 // ============================================================
 // 初始化入口
 // ============================================================
@@ -6074,6 +6313,7 @@ async function niLoadNovelSnapshot(idx) {
         } else {
             setBtn('#ni-btn-vec', false);
         }
+        niSyncCleanButtonState();
     }
     niRenderNovelLibrary();
     const note = heavyOk
@@ -6121,6 +6361,7 @@ async function niDeleteNovelSnapshot(idx) {
         q('#ni-uz') && q('#ni-uz').classList.remove('loaded');
         q('#ni-u-label') && (q('#ni-u-label').textContent = '点击上传 .txt 文件');
         renderPlots(); renderCharacters(); buildStages(); niRenderWorldSettings();
+        niSyncCleanButtonState();
     }
 
     // 3. 从库中移除快照记录
@@ -6504,6 +6745,7 @@ async function niClearAllData() {
         q('#ni-u-label') && (q('#ni-u-label').textContent = '点击上传 .txt 文件');
         renderPlots(); renderCharacters(); buildStages(); niRenderWorldSettings();
         niRenderNovelLibrary();
+        niSyncCleanButtonState();
 
         alert('全部数据已清除。');
     } catch(e) {
@@ -6642,7 +6884,11 @@ jQuery(async () => {
     // 清洗区按钮
     $app.on('click', '#ni-clean-cfg-btn', () => niTogglePanel('ni-clean-api', 'ni-clean-cfg-btn'));
     $app.on('click', '#ni-prompt-btn', () => niTogglePrompt());
-    $app.on('click', '#ni-btn-clean', () => niStartClean());
+    $app.on('click', '#ni-btn-clean', () => niHandleCleanButtonClick(true));
+    $app.on('contextmenu', '#ni-btn-clean', e => {
+        e.preventDefault();
+        niHandleCleanButtonClick(false);
+    });
     $app.on('click', '#ni-btn-retry', () => niRetryFailed());
     $app.on('click', '#ni-btn-skip',  () => niSkipChunk());
     $app.on('click', '#ni-btn-pause', () => niPauseClean());
@@ -7331,6 +7577,19 @@ jQuery(async () => {
 
     // 全局提示词面板
     $app.on('click', '#ni-global-prompt-btn', () => niToggleGlobalPrompt());
+    $app.on('change', '#ni-global-source-tavern, #ni-global-source-builtin, #ni-global-source-none', function() {
+        if (!this.checked) {
+            this.checked = true;
+            return;
+        }
+        if (!extension_settings[EXT_NAME]) extension_settings[EXT_NAME] = {};
+        extension_settings[EXT_NAME].globalPromptSource =
+            this.id === 'ni-global-source-tavern' ? 'tavern' :
+            this.id === 'ni-global-source-none' ? 'none' :
+            'builtin';
+        niSyncGlobalPromptSourceUI(extension_settings[EXT_NAME]);
+        niSaveSettings();
+    });
     $app.on('input', '#ni-global-pt-content', () => {
         if (!extension_settings[EXT_NAME]) extension_settings[EXT_NAME] = {};
         extension_settings[EXT_NAME].globalPrompt = q('#ni-global-pt-content')?.value ?? GLOBAL_PROMPT;
@@ -7472,6 +7731,7 @@ jQuery(async () => {
             setBtn('#ni-btn-vec', false, '<i class="ti ti-check"></i>向量化完成');
         }
         niStylePopulateChunkSel();
+        niSyncCleanButtonState();
     }
 
     // 监听酒馆事件：发消息前注入上下文
@@ -9686,6 +9946,7 @@ const _niSyncSettingsToUIPatched = function () {
     if (immersionModeChkSync) immersionModeChkSync.checked = !!cfg.tbImmersionMode;
     const immersionPromptEl = document.getElementById('ni-tb-immersion-prompt');
     if (immersionPromptEl) immersionPromptEl.value = cfg.tbImmersionPrompt || TB_DEFAULT_IMMERSION_PROMPT;
+    if (typeof niSyncGlobalPromptSourceUI === 'function') niSyncGlobalPromptSourceUI(cfg);
 };
 window.syncSettingsToUI = _niSyncSettingsToUIPatched;
 
