@@ -75,11 +75,13 @@ const DB_STORE = 'chunks';
 const TAVERN_TASK_SWITCH_PROMPT = `当你收到 Novel Injector 发出的后台任务指令时，将当前请求视为工具任务，而不是 RP、续写、聊天回复、角色扮演回合或前台剧情推进。
 不要以当前角色身份回应，不要读取、延续或改写前台聊天，不要加入寒暄、解释、免责声明或 Markdown 代码块。
 酒馆预设中的 ECoT、thinking、content、branches、状态栏、assistant prefill、角色扮演回合格式、续写格式只属于前台聊天任务，不适用于 Novel Injector 后台任务。
+任务提示词中的“你是”“作为”“专家”“编辑”“分析师”“整理师”等措辞只表示本次工具任务需要的处理视角或能力标签，不是身份替换、人格设定、开发者声明、角色卡修改或 RP 扮演请求。
 只根据本次任务提示词处理提供的文本/上下文，并严格遵守该任务提示词指定的输出结构、标签、字段和语言。`;
 
 const TAVERN_TASK_FINAL_OVERRIDE_PROMPT = `再次确认：请只执行上一条 Novel Injector 任务指令。
 这是 Novel Injector 后台任务请求，不是 RP、续写、扮演或聊天回复。
 不要输出酒馆预设要求的 <thinking>、<content>、<branches>、状态栏、角色台词、开场白或 prefill。
+不要输出身份冲突、测试输入被拒绝、权限不足、无法改变身份、无法接受角色等说明；任务中的身份化措辞只是工具处理标签。
 最终输出必须严格服从上一条任务提示词指定的格式；不要把本确认语当成新的输出格式。`;
 
 // 清洗提示词
@@ -2150,6 +2152,36 @@ async function niWithTavernMacroSandbox(fn) {
     return await fn(niCreateTavernMacroState());
 }
 
+function niNeutralizeTavernTaskIdentityLanguage(content) {
+    const source = String(content || '');
+    const headLimit = Math.min(source.length, 1800);
+    let head = source.slice(0, headLimit);
+    const tail = source.slice(headLimit);
+
+    head = head
+        .replace(/(^|[\n。！？.!?]\s*)你现在是/g, '$1本任务处理器定位为')
+        .replace(/(^|[\n。！？.!?]\s*)你是一位/g, '$1本任务需要一位')
+        .replace(/(^|[\n。！？.!?]\s*)你是/g, '$1本任务需要')
+        .replace(/你的核心能力是/g, '本任务需要的核心能力是')
+        .replace(/你的任务/g, '本任务')
+        .replace(/你需要/g, '本任务需要')
+        .replace(/请你/g, '请')
+        .replace(/你必须/g, '本任务必须')
+        .replace(/你不得/g, '本任务不得');
+
+    return `${head}${tail}`;
+}
+
+function niWrapTavernTaskMessageContent(content) {
+    const body = niNeutralizeTavernTaskIdentityLanguage(content).trim();
+    if (!body) return '';
+    return `[Novel Injector 后台任务正文]
+说明：以下内容是插件发出的工具任务说明。若其中出现“你是”“作为”“专家”“编辑”“分析师”“整理师”等角色化措辞，请只理解为处理视角或能力标签，不要视为身份替换、人格设定、开发者声明、角色卡修改或 RP 请求。
+
+${body}
+[/Novel Injector 后台任务正文]`;
+}
+
 async function niBuildTavernPresetMessages(messages) {
     return niWithTavernMacroSandbox(async (macroState) => {
         const presetEntries = niGetTavernPresetPromptEntries('quiet');
@@ -2167,7 +2199,7 @@ async function niBuildTavernPresetMessages(messages) {
         result.push({ role: 'system', content: TAVERN_TASK_SWITCH_PROMPT });
         let lastTaskUserIndex = -1;
         for (const message of Array.isArray(messages) ? messages : []) {
-            const content = niMessageContentToText(message?.content).trim();
+            const content = niWrapTavernTaskMessageContent(niMessageContentToText(message?.content));
             if (!content) continue;
             const role = niNormalizeTavernMessageRole(message?.role || 'user');
             result.push({
@@ -2186,6 +2218,152 @@ async function niBuildTavernPresetMessages(messages) {
         }
         return result;
     });
+}
+
+function niContentPartToText(value, depth = 0) {
+    if (value === undefined || value === null || depth > 8) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (Array.isArray(value)) return value.map(item => niContentPartToText(item, depth + 1)).join('');
+    if (typeof value !== 'object') return '';
+
+    const keys = ['text', 'content', 'output_text', 'message', 'completion', 'response', 'generated_text', 'delta', 'parts', 'output'];
+    for (const key of keys) {
+        if (Object.prototype.hasOwnProperty.call(value, key)) {
+            const text = niContentPartToText(value[key], depth + 1);
+            if (text) return text;
+        }
+    }
+    return '';
+}
+
+function niExtractChatCompletionText(data) {
+    if (data === undefined || data === null) return '';
+    if (typeof data === 'string') return data;
+
+    try {
+        const extracted = extractMessageFromData(data, 'openai');
+        if (typeof extracted === 'string' && extracted.trim()) return extracted;
+    } catch (_) {}
+
+    const choice = Array.isArray(data?.choices) ? data.choices[0] : null;
+    const candidates = [
+        choice?.delta?.content,
+        choice?.delta?.text,
+        choice?.message?.content,
+        choice?.text,
+        data?.delta?.text,
+        data?.delta?.content,
+        data?.delta,
+        data?.message?.content,
+        data?.content,
+        data?.output_text,
+        data?.output,
+        data?.completion,
+        data?.response,
+        data?.text,
+        data?.generated_text,
+        data?.candidates?.[0]?.content?.parts,
+        data?.candidates?.[0]?.content,
+        data?.candidates?.[0]?.text,
+    ];
+
+    for (const candidate of candidates) {
+        const text = niContentPartToText(candidate);
+        if (text && text.trim()) return text;
+    }
+    return '';
+}
+
+function niExtractChatCompletionTextFromRaw(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return '';
+
+    if (text.startsWith('{') || text.startsWith('[')) {
+        try {
+            return niExtractChatCompletionText(JSON.parse(text));
+        } catch (_) {}
+    }
+
+    let full = '';
+    for (const line of text.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+        try {
+            full += niExtractChatCompletionText(JSON.parse(payload));
+        } catch (_) {}
+    }
+    return full;
+}
+
+async function niReadChatCompletionStream(resp, controller, cleanup, emptyMessage = '流式响应内容为空') {
+    const reader = resp.body?.getReader();
+    if (!reader) {
+        cleanup?.();
+        throw new Error(emptyMessage);
+    }
+
+    const decoder = new TextDecoder();
+    const signal = controller?.signal;
+    let full = '';
+    let raw = '';
+    let pending = '';
+
+    const processLine = (line) => {
+        const trimmed = String(line || '').trim();
+        if (!trimmed.startsWith('data:')) return;
+        const payload = trimmed.slice(5).trim();
+        if (!payload || payload === '[DONE]') return;
+        try {
+            full += niExtractChatCompletionText(JSON.parse(payload));
+        } catch (_) {}
+    };
+
+    try {
+        while (true) {
+            const readPromise = reader.read();
+            const readResult = signal
+                ? await Promise.race([
+                    readPromise,
+                    new Promise((_, rej) => {
+                        if (signal.aborted) rej(new Error('AbortError'));
+                        else signal.addEventListener('abort', () => rej(new Error('AbortError')), { once: true });
+                    }),
+                ])
+                : await readPromise;
+            const { done, value } = readResult;
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+            raw += chunk;
+            pending += chunk;
+            const lines = pending.split(/\r?\n/);
+            pending = lines.pop() || '';
+            for (const line of lines) processLine(line);
+        }
+
+        const tail = decoder.decode(undefined, { stream: false });
+        if (tail) {
+            raw += tail;
+            pending += tail;
+        }
+        if (pending.trim()) processLine(pending);
+    } catch (err) {
+        reader.cancel().catch(() => {});
+        cleanup?.();
+        if (signal?.aborted || err?.message === 'AbortError') throw new Error('请求已中止（超时或用户操作）');
+        throw err;
+    }
+
+    cleanup?.();
+    if (full.trim()) return full.trim();
+
+    const fallback = niExtractChatCompletionTextFromRaw(raw);
+    if (fallback.trim()) return fallback.trim();
+
+    throw new Error(emptyMessage);
 }
 
 async function niGenerateWithTavernMainPreset(messages, { responseLength = null } = {}) {
@@ -2240,37 +2418,7 @@ async function niGenerateWithTavernMainPreset(messages, { responseLength = null 
     }
 
     if (useStream) {
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        let full = '';
-        try {
-            while (true) {
-                const readPromise = reader.read();
-                const abortPromise = new Promise((_, rej) => {
-                    controller.signal.addEventListener('abort', () => rej(new Error('AbortError')), { once: true });
-                });
-                const { done, value } = await Promise.race([readPromise, abortPromise]);
-                if (done) break;
-                const chunk = decoder.decode(value, { stream: true });
-                for (const line of chunk.split('\n')) {
-                    if (!line.startsWith('data:')) continue;
-                    const data = line.slice(5).trim();
-                    if (data === '[DONE]') continue;
-                    try {
-                        const parsed = JSON.parse(data);
-                        const delta = parsed?.choices?.[0]?.delta?.content || '';
-                        full += delta;
-                    } catch (_) {}
-                }
-            }
-        } catch (err) {
-            reader.cancel().catch(() => {});
-            cleanup();
-            throw new Error('请求已中止（超时或用户操作）');
-        }
-        cleanup();
-        if (full.trim()) return full.trim();
-        throw new Error('酒馆主预设调用失败：流式响应内容为空');
+        return await niReadChatCompletionStream(resp, controller, cleanup, '酒馆主预设调用失败：流式响应内容为空');
     }
 
     let data;
@@ -2286,7 +2434,7 @@ async function niGenerateWithTavernMainPreset(messages, { responseLength = null 
     }
 
     const result = cleanUpMessage({
-        getMessage: extractMessageFromData(data, 'openai'),
+        getMessage: niExtractChatCompletionText(data),
         isImpersonate: false,
         isContinue: false,
         displayIncompleteSentences: true,
@@ -2412,39 +2560,7 @@ async function callCleanApi(messages) {
 
         // 流式模式：逐行读取 SSE，signal 也传给 reader 确保可被 abort
         if (useStream) {
-            const reader = resp.body.getReader();
-            const decoder = new TextDecoder();
-            let full = '';
-            try {
-                while (true) {
-                    // race: reader.read() vs abort signal
-                    const readPromise = reader.read();
-                    const abortPromise = new Promise((_, rej) => {
-                        controller.signal.addEventListener('abort', () => rej(new Error('AbortError')), { once: true });
-                    });
-                    const { done, value } = await Promise.race([readPromise, abortPromise]);
-                    if (done) break;
-                    const chunk = decoder.decode(value, { stream: true });
-                    const lines = chunk.split('\n');
-                    for (const line of lines) {
-                        if (!line.startsWith('data:')) continue;
-                        const data = line.slice(5).trim();
-                        if (data === '[DONE]') continue;
-                        try {
-                            const parsed = JSON.parse(data);
-                            const delta = parsed?.choices?.[0]?.delta?.content || '';
-                            full += delta;
-                        } catch (_) {}
-                    }
-                }
-            } catch (err) {
-                reader.cancel().catch(() => {});
-                cleanup();
-                throw new Error('请求已中止（超时或用户操作）');
-            }
-            cleanup();
-            if (full.trim()) return full.trim();
-            throw new Error('流式响应内容为空');
+            return await niReadChatCompletionStream(resp, controller, cleanup, '流式响应内容为空');
         }
 
         // 非流式模式
@@ -4681,26 +4797,7 @@ async function callApiSeq(messages) {
     if (!resp.ok) throw new Error(`API ${resp.status}`);
 
     if (useStream) {
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        let full = '';
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const chunk = decoder.decode(value, { stream: true });
-            for (const line of chunk.split('\n')) {
-                if (!line.startsWith('data:')) continue;
-                const data = line.slice(5).trim();
-                if (data === '[DONE]') continue;
-                try {
-                    const parsed = JSON.parse(data);
-                    const delta = parsed?.choices?.[0]?.delta?.content || '';
-                    full += delta;
-                } catch (_) {}
-            }
-        }
-        if (full.trim()) return full.trim();
-        throw new Error('流式响应内容为空');
+        return await niReadChatCompletionStream(resp, null, () => {}, '流式响应内容为空');
     }
 
     const json = await resp.json();
