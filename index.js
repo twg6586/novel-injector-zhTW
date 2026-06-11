@@ -11,10 +11,17 @@ import {
 
 import {
     saveSettingsDebounced,
+    cleanUpMessage,
     eventSource,
     event_types,
+    extractMessageFromData,
     getRequestHeaders,
+    substituteParams,
 } from '/script.js';
+
+import {
+    promptManager,
+} from '/scripts/openai.js';
 
 import {
     niB64,
@@ -65,9 +72,15 @@ const DB_NAME = 'NovelInjectorVectors';
 const DB_VERSION = 2;
 const DB_STORE = 'chunks';
 
-const TAVERN_TASK_SWITCH_PROMPT = `当你收到 Novel Injector 的清洗、总结、结构化整理、提取角色/剧情/文风/阶段/世界设定等任务指令时，不再遵守当前角色扮演、续写、对话、旁白、扮演身份或酒馆预设里的输出格式，转为工具任务格式。
-本次请求不是 RP 任务，不要以角色身份回应，不要推进剧情，不要和用户对话，不要加入寒暄、解释、免责声明或 Markdown 代码块。
-只根据本次任务要求处理提供的小说文本/上下文，并严格遵守任务中指定的输出结构、标签和 JSON 字段；如果任务要求输出 ni_meta、JSON 或固定标题结构，必须只输出该结构。`;
+const TAVERN_TASK_SWITCH_PROMPT = `当你收到 Novel Injector 发出的后台任务指令时，将当前请求视为工具任务，而不是 RP、续写、聊天回复、角色扮演回合或前台剧情推进。
+不要以当前角色身份回应，不要读取、延续或改写前台聊天，不要加入寒暄、解释、免责声明或 Markdown 代码块。
+酒馆预设中的 ECoT、thinking、content、branches、状态栏、assistant prefill、角色扮演回合格式、续写格式只属于前台聊天任务，不适用于 Novel Injector 后台任务。
+只根据本次任务提示词处理提供的文本/上下文，并严格遵守该任务提示词指定的输出结构、标签、字段和语言。`;
+
+const TAVERN_TASK_FINAL_OVERRIDE_PROMPT = `再次确认：请只执行上一条 Novel Injector 任务指令。
+这是 Novel Injector 后台任务请求，不是 RP、续写、扮演或聊天回复。
+不要输出酒馆预设要求的 <thinking>、<content>、<branches>、状态栏、角色台词、开场白或 prefill。
+最终输出必须严格服从上一条任务提示词指定的格式；不要把本确认语当成新的输出格式。`;
 
 // 清洗提示词
 const CLEAN_PROMPT = `小说分阶段精准压缩
@@ -1664,43 +1677,623 @@ function niMessageContentToText(content) {
     return String(content ?? '');
 }
 
-function niMessagesToTavernQuietPrompt(messages) {
-    const body = (Array.isArray(messages) ? messages : [])
-        .map(message => {
-            const role = String(message?.role || 'user').toUpperCase();
+const TAVERN_TASK_ACTOR_NAME = 'Novel Injector';
+const TAVERN_TASK_USER_NAME = 'Novel Injector User';
+const TAVERN_GLOBAL_PROMPT_ORDER_IDS = [100001, 100000];
+const TAVERN_FOREGROUND_MACRO_NAMES = [
+    'input',
+    'lastMessage',
+    'lastMessageId',
+    'lastUserMessage',
+    'lastCharMessage',
+    'firstIncludedMessageId',
+    'firstDisplayedMessageId',
+    'lastSwipeId',
+    'currentSwipeId',
+    'allChatRange',
+    'idle_duration',
+];
+const TAVERN_CONTEXT_PROMPT_IDS = new Set([
+    'chatHistory',
+    'dialogueExamples',
+    'worldInfoBefore',
+    'worldInfoAfter',
+    'charDescription',
+    'charPersonality',
+    'scenario',
+    'personaDescription',
+    'groupNudge',
+    'summary',
+    'authorsNote',
+    'vectorsMemory',
+    'vectorsDataBank',
+    'smartContext',
+]);
+
+function niDeepClonePlain(value) {
+    if (value == null) return value;
+    try {
+        return structuredClone(value);
+    } catch (_) {
+        try { return JSON.parse(JSON.stringify(value)); }
+        catch (_) { return value; }
+    }
+}
+
+function niNormalizeTavernMessageRole(role) {
+    const value = String(role || 'system').toLowerCase();
+    return ['system', 'user', 'assistant'].includes(value) ? value : 'system';
+}
+
+function niGetTavernPresetOrder(settings) {
+    const lists = Array.isArray(settings?.prompt_order) ? settings.prompt_order : [];
+    const candidateIds = [
+        promptManager?.configuration?.promptOrder?.dummyId,
+        ...TAVERN_GLOBAL_PROMPT_ORDER_IDS,
+    ].filter(x => x !== undefined && x !== null);
+    for (const id of candidateIds) {
+        const matched = lists.find(list => String(list?.character_id) === String(id));
+        if (Array.isArray(matched?.order) && matched.order.length) return matched.order;
+    }
+    const namedGlobal = lists.find(list => ['global', 'default', ''].includes(String(list?.character_id ?? '').toLowerCase()) && Array.isArray(list?.order) && list.order.length);
+    if (namedGlobal) return namedGlobal.order;
+    if (lists.length === 1 && Array.isArray(lists[0]?.order)) return lists[0].order;
+    return [];
+}
+
+function niShouldUseTavernPresetPrompt(prompt, entry, generationType = 'quiet') {
+    if (!prompt) return false;
+    if (entry && entry.enabled === false) return false;
+    const identifier = String(prompt.identifier || entry?.identifier || '');
+    if (!identifier) return false;
+    if (TAVERN_CONTEXT_PROMPT_IDS.has(identifier)) return false;
+    if (prompt.marker) return false;
+    if (typeof promptManager?.shouldTrigger === 'function' && !promptManager.shouldTrigger(prompt, generationType)) return false;
+    return typeof prompt.content === 'string' && prompt.content.trim().length > 0;
+}
+
+function niGetTavernPresetPromptEntries(generationType = 'quiet') {
+    const settings = promptManager?.serviceSettings;
+    if (!settings) throw new Error('酒馆主预设调用失败：未找到当前酒馆预设设置');
+    const prompts = Array.isArray(settings.prompts) ? settings.prompts : [];
+    const promptMap = new Map(prompts.filter(p => p?.identifier).map(p => [String(p.identifier), p]));
+    const order = niGetTavernPresetOrder(settings);
+    const entries = [];
+
+    if (order.length) {
+        for (const entry of order) {
+            const prompt = promptMap.get(String(entry?.identifier || ''));
+            if (niShouldUseTavernPresetPrompt(prompt, entry, generationType)) entries.push(prompt);
+        }
+    } else {
+        for (const prompt of prompts) {
+            const entry = { identifier: prompt?.identifier, enabled: prompt?.enabled !== false };
+            if (niShouldUseTavernPresetPrompt(prompt, entry, generationType)) entries.push(prompt);
+        }
+    }
+
+    return entries;
+}
+
+function niTavernEmptyCharacterMacros() {
+    return {
+        char: TAVERN_TASK_ACTOR_NAME,
+        charIfNotGroup: TAVERN_TASK_ACTOR_NAME,
+        group: TAVERN_TASK_ACTOR_NAME,
+        groupNotMuted: TAVERN_TASK_ACTOR_NAME,
+        notChar: TAVERN_TASK_USER_NAME,
+        user: TAVERN_TASK_USER_NAME,
+        charPrompt: '',
+        charInstruction: '',
+        charJailbreak: '',
+        description: '',
+        charDescription: '',
+        personality: '',
+        charPersonality: '',
+        scenario: '',
+        charScenario: '',
+        persona: '',
+        mesExamples: '',
+        mesExamplesRaw: '',
+        charVersion: '',
+        char_version: '',
+        charDepthPrompt: '',
+        creatorNotes: '',
+    };
+}
+
+function niTavernVarToString(value) {
+    if (value === undefined || value === null) return '';
+    if (typeof value === 'string') return value;
+    try { return JSON.stringify(value); }
+    catch (_) { return String(value); }
+}
+
+function niCreateTavernMacroState() {
+    return {
+        local: {},
+        global: niDeepClonePlain(extension_settings?.variables?.global || {}) || {},
+    };
+}
+
+function niGetTavernVarStore(macroState, scope = 'local') {
+    if (!macroState) return {};
+    const key = scope === 'global' ? 'global' : 'local';
+    if (!macroState[key] || typeof macroState[key] !== 'object') macroState[key] = {};
+    return macroState[key];
+}
+
+function niTavernReadVar(macroState, scope, name) {
+    const store = niGetTavernVarStore(macroState, scope);
+    const key = String(name || '').trim();
+    return niTavernVarToString(store[key]);
+}
+
+function niTavernSetVar(macroState, scope, name, value) {
+    const key = String(name || '').trim();
+    if (!key) return;
+    niGetTavernVarStore(macroState, scope)[key] = niTavernVarToString(value);
+}
+
+function niTavernAddVar(macroState, scope, name, value) {
+    const key = String(name || '').trim();
+    if (!key) return;
+    const store = niGetTavernVarStore(macroState, scope);
+    const before = niTavernVarToString(store[key]);
+    const addend = niTavernVarToString(value);
+    const beforeNumber = Number(before || 0);
+    const addNumber = Number(addend);
+    store[key] = Number.isFinite(beforeNumber) && Number.isFinite(addNumber) && before.trim() !== ''
+        ? String(beforeNumber + addNumber)
+        : `${before}${addend}`;
+}
+
+function niTavernIncDecVar(macroState, scope, name, delta) {
+    const key = String(name || '').trim();
+    if (!key) return '0';
+    const store = niGetTavernVarStore(macroState, scope);
+    const next = (Number(store[key] || 0) || 0) + delta;
+    store[key] = String(next);
+    return store[key];
+}
+
+function niSplitTavernMacroArgs(text, maxParts = 3) {
+    const parts = [];
+    let rest = String(text || '');
+    while (parts.length < maxParts - 1) {
+        const idx = rest.indexOf('::');
+        if (idx < 0) break;
+        parts.push(rest.slice(0, idx));
+        rest = rest.slice(idx + 2);
+    }
+    parts.push(rest);
+    return parts.map(part => part.trim());
+}
+
+function niParseTavernMacroCall(rawBody) {
+    let body = String(rawBody || '').trim();
+    if (!body) return null;
+    if (body.startsWith('//')) return { name: 'comment', args: [] };
+    if (body.startsWith('#')) body = body.slice(1).trim();
+
+    const colonIdx = body.indexOf('::');
+    if (colonIdx >= 0) {
+        const name = body.slice(0, colonIdx).trim().toLowerCase();
+        const args = niSplitTavernMacroArgs(body.slice(colonIdx + 2), 2);
+        return { name, args };
+    }
+
+    const spaceMatch = body.match(/^([A-Za-z][\w-]*)\s+([\s\S]*)$/);
+    if (spaceMatch) {
+        const name = spaceMatch[1].toLowerCase();
+        const argText = spaceMatch[2].trim();
+        if (['setvar', 'setglobalvar', 'addvar', 'addglobalvar'].includes(name)) {
+            const argMatch = argText.match(/^(\S+)\s+([\s\S]*)$/);
+            return { name, args: argMatch ? [argMatch[1], argMatch[2]] : [argText, ''] };
+        }
+        return { name, args: [argText] };
+    }
+
+    return { name: body.toLowerCase(), args: [] };
+}
+
+function niFindTavernMacroEnd(text, start) {
+    let depth = 1;
+    for (let i = start + 2; i < text.length - 1; i++) {
+        if (text.startsWith('{{', i)) {
+            depth++;
+            i++;
+            continue;
+        }
+        if (text.startsWith('}}', i)) {
+            depth--;
+            if (depth === 0) return i;
+            i++;
+        }
+    }
+    return -1;
+}
+
+function niApplyTavernVariableMacro(call, macroState, depth) {
+    if (!call) return null;
+    const [arg1 = '', arg2 = ''] = call.args || [];
+    const localName = call.name.replace(/^local/, '');
+    const isGlobal = call.name.includes('global');
+    const scope = isGlobal ? 'global' : 'local';
+
+    if (call.name === 'comment' || call.name === 'trim') return '';
+    if (['setvar', 'setglobalvar'].includes(call.name)) {
+        niTavernSetVar(macroState, scope, arg1, niProcessTavernVariableMacros(arg2, macroState, depth + 1));
+        return '';
+    }
+    if (['addvar', 'addglobalvar'].includes(call.name)) {
+        niTavernAddVar(macroState, scope, arg1, niProcessTavernVariableMacros(arg2, macroState, depth + 1));
+        return '';
+    }
+    if (['getvar', 'getglobalvar'].includes(call.name)) return niProcessTavernVariableMacros(niTavernReadVar(macroState, scope, arg1), macroState, depth + 1);
+    if (['incvar', 'incglobalvar'].includes(call.name)) return niTavernIncDecVar(macroState, scope, arg1, 1);
+    if (['decvar', 'decglobalvar'].includes(call.name)) return niTavernIncDecVar(macroState, scope, arg1, -1);
+    if (['hasvar', 'hasglobalvar', 'varexists', 'globalvarexists'].includes(call.name)) {
+        const store = niGetTavernVarStore(macroState, scope);
+        return Object.prototype.hasOwnProperty.call(store, String(arg1 || '').trim()) ? 'true' : 'false';
+    }
+    if (['deletevar', 'deleteglobalvar', 'flushvar', 'flushglobalvar'].includes(call.name)) {
+        delete niGetTavernVarStore(macroState, scope)[String(arg1 || '').trim()];
+        return '';
+    }
+
+    // Leave non-variable macros to SillyTavern's normal macro engine.
+    if (localName !== call.name) return null;
+    return null;
+}
+
+function niTavernIsFalsy(value) {
+    const text = niTavernVarToString(value).trim().toLowerCase();
+    return !text || text === '0' || text === 'false' || text === 'null' || text === 'undefined';
+}
+
+function niApplyTavernVariableShorthand(rawBody, macroState, depth) {
+    const body = String(rawBody || '').trim();
+    if (!body.startsWith('.') && !body.startsWith('$')) return null;
+
+    const scope = body.startsWith('$') ? 'global' : 'local';
+    const expr = body.slice(1).trim();
+    if (!expr) return '';
+
+    const operators = ['||=', '??=', '+=', '-=', '==', '!=', '>=', '<=', '++', '--', '||', '??', '=', '>', '<'];
+    let found = null;
+    for (const op of operators) {
+        const idx = expr.indexOf(op);
+        if (idx >= 0 && (!found || idx < found.idx || (idx === found.idx && op.length > found.op.length))) {
+            found = { op, idx };
+        }
+    }
+
+    const name = (found ? expr.slice(0, found.idx) : expr).trim();
+    const rawValue = found ? expr.slice(found.idx + found.op.length).trim() : '';
+    if (!name) return '';
+
+    const store = niGetTavernVarStore(macroState, scope);
+    const hasValue = Object.prototype.hasOwnProperty.call(store, name);
+    const current = niTavernReadVar(macroState, scope, name);
+    const value = () => niProcessTavernVariableMacros(rawValue, macroState, depth + 1);
+
+    if (!found) return current;
+    switch (found.op) {
+        case '=':
+            niTavernSetVar(macroState, scope, name, value());
+            return '';
+        case '+=':
+            niTavernAddVar(macroState, scope, name, value());
+            return '';
+        case '-=': {
+            const next = (Number(current || 0) || 0) - (Number(value()) || 0);
+            niTavernSetVar(macroState, scope, name, String(next));
+            return '';
+        }
+        case '++':
+            return niTavernIncDecVar(macroState, scope, name, 1);
+        case '--':
+            return niTavernIncDecVar(macroState, scope, name, -1);
+        case '||':
+            return niTavernIsFalsy(current) ? value() : current;
+        case '??':
+            return hasValue ? current : value();
+        case '||=':
+            if (niTavernIsFalsy(current)) niTavernSetVar(macroState, scope, name, value());
+            return niTavernReadVar(macroState, scope, name);
+        case '??=':
+            if (!hasValue) niTavernSetVar(macroState, scope, name, value());
+            return niTavernReadVar(macroState, scope, name);
+        case '==':
+            return current === value() ? 'true' : 'false';
+        case '!=':
+            return current !== value() ? 'true' : 'false';
+        case '>':
+            return Number(current) > Number(value()) ? 'true' : 'false';
+        case '>=':
+            return Number(current) >= Number(value()) ? 'true' : 'false';
+        case '<':
+            return Number(current) < Number(value()) ? 'true' : 'false';
+        case '<=':
+            return Number(current) <= Number(value()) ? 'true' : 'false';
+        default:
+            return null;
+    }
+}
+
+function niProcessTavernVariableBlocks(content, macroState, depth = 0) {
+    return String(content || '').replace(/{{#?(setvar|setglobalvar)::([^}]*)}}([\s\S]*?){{\/\1}}/gi, (_, name, key, value) => {
+        const scope = String(name).toLowerCase().includes('global') ? 'global' : 'local';
+        niTavernSetVar(macroState, scope, key, niProcessTavernVariableMacros(value, macroState, depth + 1));
+        return '';
+    });
+}
+
+function niProcessTavernVariableMacros(content, macroState, depth = 0) {
+    if (!content || depth > 20) return String(content || '');
+    const source = niProcessTavernVariableBlocks(content, macroState, depth);
+    let output = '';
+    let index = 0;
+
+    while (index < source.length) {
+        const start = source.indexOf('{{', index);
+        if (start < 0) {
+            output += source.slice(index);
+            break;
+        }
+        output += source.slice(index, start);
+        const end = niFindTavernMacroEnd(source, start);
+        if (end < 0) {
+            output += source.slice(start);
+            break;
+        }
+
+        const raw = source.slice(start + 2, end);
+        const shorthandReplacement = niApplyTavernVariableShorthand(raw, macroState, depth);
+        const replacement = shorthandReplacement === null
+            ? niApplyTavernVariableMacro(niParseTavernMacroCall(raw), macroState, depth)
+            : shorthandReplacement;
+        output += replacement === null ? source.slice(start, end + 2) : replacement;
+        index = end + 2;
+    }
+
+    return output;
+}
+
+function niNeutralizeTavernForegroundMacros(content) {
+    let result = String(content || '');
+    for (const name of [...TAVERN_FOREGROUND_MACRO_NAMES].sort((a, b) => b.length - a.length)) {
+        result = result.replace(new RegExp(`{{\\s*${name}\\s*}}`, 'gi'), '');
+    }
+    return result;
+}
+
+function niFallbackCleanTavernMacros(content) {
+    return String(content || '')
+        .replace(/{{\/\/[\s\S]*?}}/g, '')
+        .replace(/{{trim}}/gi, '')
+        .trim();
+}
+
+function niTavernVariableDynamicMacro(macroState, scope, action) {
+    return {
+        unnamedArgs: ['set', 'add'].includes(action) ? 2 : 1,
+        strictArgs: false,
+        handler: ({ unnamedArgs = [] } = {}) => {
+            const [name = '', value = ''] = unnamedArgs;
+            if (action === 'set') {
+                niTavernSetVar(macroState, scope, name, value);
+                return '';
+            }
+            if (action === 'add') {
+                niTavernAddVar(macroState, scope, name, value);
+                return '';
+            }
+            if (action === 'get') return niTavernReadVar(macroState, scope, name);
+            if (action === 'inc') return niTavernIncDecVar(macroState, scope, name, 1);
+            if (action === 'dec') return niTavernIncDecVar(macroState, scope, name, -1);
+            if (action === 'has') return Object.prototype.hasOwnProperty.call(niGetTavernVarStore(macroState, scope), String(name || '').trim()) ? 'true' : 'false';
+            if (action === 'del') {
+                delete niGetTavernVarStore(macroState, scope)[String(name || '').trim()];
+                return '';
+            }
+            return '';
+        },
+    };
+}
+
+function niTavernSubstitutionMacros(macroState) {
+    const macros = {
+        ...niTavernEmptyCharacterMacros(),
+        setvar: niTavernVariableDynamicMacro(macroState, 'local', 'set'),
+        addvar: niTavernVariableDynamicMacro(macroState, 'local', 'add'),
+        getvar: niTavernVariableDynamicMacro(macroState, 'local', 'get'),
+        incvar: niTavernVariableDynamicMacro(macroState, 'local', 'inc'),
+        decvar: niTavernVariableDynamicMacro(macroState, 'local', 'dec'),
+        hasvar: niTavernVariableDynamicMacro(macroState, 'local', 'has'),
+        varexists: niTavernVariableDynamicMacro(macroState, 'local', 'has'),
+        deletevar: niTavernVariableDynamicMacro(macroState, 'local', 'del'),
+        flushvar: niTavernVariableDynamicMacro(macroState, 'local', 'del'),
+        setglobalvar: niTavernVariableDynamicMacro(macroState, 'global', 'set'),
+        addglobalvar: niTavernVariableDynamicMacro(macroState, 'global', 'add'),
+        getglobalvar: niTavernVariableDynamicMacro(macroState, 'global', 'get'),
+        incglobalvar: niTavernVariableDynamicMacro(macroState, 'global', 'inc'),
+        decglobalvar: niTavernVariableDynamicMacro(macroState, 'global', 'dec'),
+        hasglobalvar: niTavernVariableDynamicMacro(macroState, 'global', 'has'),
+        globalvarexists: niTavernVariableDynamicMacro(macroState, 'global', 'has'),
+        deleteglobalvar: niTavernVariableDynamicMacro(macroState, 'global', 'del'),
+        flushglobalvar: niTavernVariableDynamicMacro(macroState, 'global', 'del'),
+    };
+    for (const name of TAVERN_FOREGROUND_MACRO_NAMES) macros[name] = '';
+    return macros;
+}
+
+function niSubstituteTavernPresetContent(content, original = '', macroState = niCreateTavernMacroState()) {
+    const withVariables = niNeutralizeTavernForegroundMacros(niProcessTavernVariableMacros(content || '', macroState));
+    try {
+        return substituteParams(withVariables, {
+            name1Override: TAVERN_TASK_USER_NAME,
+            name2Override: TAVERN_TASK_ACTOR_NAME,
+            groupOverride: TAVERN_TASK_ACTOR_NAME,
+            original,
+            replaceCharacterCard: false,
+            dynamicMacros: niTavernSubstitutionMacros(macroState),
+        });
+    } catch (err) {
+        console.warn('[Novel Injector] 酒馆预设宏替换失败，已保留变量处理后的原文。', err);
+        return niFallbackCleanTavernMacros(withVariables);
+    }
+}
+
+async function niWithTavernMacroSandbox(fn) {
+    return await fn(niCreateTavernMacroState());
+}
+
+async function niBuildTavernPresetMessages(messages) {
+    return niWithTavernMacroSandbox(async (macroState) => {
+        const presetEntries = niGetTavernPresetPromptEntries('quiet');
+        const result = [];
+        for (const prompt of presetEntries) {
+            const content = niSubstituteTavernPresetContent(prompt.content, '', macroState).trim();
+            if (!content) continue;
+            const role = niNormalizeTavernMessageRole(prompt.role);
+            result.push({
+                role: role === 'assistant' ? 'system' : role,
+                content,
+            });
+        }
+
+        result.push({ role: 'system', content: TAVERN_TASK_SWITCH_PROMPT });
+        let lastTaskUserIndex = -1;
+        for (const message of Array.isArray(messages) ? messages : []) {
             const content = niMessageContentToText(message?.content).trim();
-            return content ? `[${role}]\n${content}` : '';
-        })
-        .filter(Boolean)
-        .join('\n\n');
-    return [`[SYSTEM]\n${TAVERN_TASK_SWITCH_PROMPT}`, body]
-        .filter(Boolean)
-        .join('\n\n');
+            if (!content) continue;
+            const role = niNormalizeTavernMessageRole(message?.role || 'user');
+            result.push({
+                role,
+                content,
+            });
+            if (role === 'user') lastTaskUserIndex = result.length - 1;
+        }
+        if (lastTaskUserIndex >= 0) {
+            result[lastTaskUserIndex].content = `${result[lastTaskUserIndex].content}\n\n${TAVERN_TASK_FINAL_OVERRIDE_PROMPT}`;
+        } else {
+            result.push({
+                role: 'user',
+                content: TAVERN_TASK_FINAL_OVERRIDE_PROMPT,
+            });
+        }
+        return result;
+    });
 }
 
 async function niGenerateWithTavernMainPreset(messages, { responseLength = null } = {}) {
-    const context = getContext?.();
-    const quietPrompt = niMessagesToTavernQuietPrompt(messages);
-    if (!quietPrompt) throw new Error('酒馆主预设调用失败：提示词内容为空');
-
-    let result = '';
-    if (typeof context?.generateQuietPrompt === 'function') {
-        result = await context.generateQuietPrompt({
-            quietPrompt,
-            quietToLoud: false,
-            skipWIAN: false,
-            responseLength,
-            trimToSentence: false,
-        });
-    } else if (typeof context?.generate === 'function') {
-        result = await context.generate('quiet', {
-            quiet_prompt: quietPrompt,
-            quietToLoud: false,
-            skipWIAN: false,
-        });
-    } else {
-        throw new Error('酒馆主预设调用失败：当前酒馆版本未提供生成接口');
+    const tavernMessages = await niBuildTavernPresetMessages(messages);
+    if (!tavernMessages.some(message => String(message.content || '').trim())) {
+        throw new Error('酒馆主预设调用失败：提示词内容为空');
     }
+
+    const cfg = extension_settings[EXT_NAME] || {};
+    const useStream = cfg.cleanStream ?? true;
+    const generate_data = {
+        chat_completion_source: 'openai',
+        messages: tavernMessages,
+        model: cfg.cleanModel,
+        max_tokens: typeof responseLength === 'number' && responseLength > 0 ? responseLength : 32000,
+        temperature: 0.3,
+        stream: useStream,
+        reverse_proxy: cfg.cleanUrl,
+        proxy_password: cfg.cleanKey,
+        user_name: TAVERN_TASK_USER_NAME,
+        char_name: TAVERN_TASK_ACTOR_NAME,
+        group_names: [],
+    };
+
+    const TIMEOUT_MS = (extension_settings[EXT_NAME]?.apiTimeoutMin ?? 15) * 60 * 1000;
+    const controller = new AbortController();
+    S._currentAbortController = controller;
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const cleanup = () => {
+        clearTimeout(timeoutId);
+        if (S._currentAbortController === controller) S._currentAbortController = null;
+    };
+
+    let resp;
+    try {
+        resp = await fetch('/api/backends/chat-completions/generate', {
+            method: 'POST',
+            headers: { ...getRequestHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify(generate_data),
+            signal: controller.signal,
+        });
+    } catch (err) {
+        cleanup();
+        if (err?.name === 'AbortError') throw new Error('请求已中止（超时或用户操作）');
+        throw err;
+    }
+
+    if (!resp.ok) {
+        cleanup();
+        const txt = await resp.text().catch(() => '');
+        throw new Error(`酒馆主预设 API ${resp.status}: ${txt.slice(0, 200)}`);
+    }
+
+    if (useStream) {
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let full = '';
+        try {
+            while (true) {
+                const readPromise = reader.read();
+                const abortPromise = new Promise((_, rej) => {
+                    controller.signal.addEventListener('abort', () => rej(new Error('AbortError')), { once: true });
+                });
+                const { done, value } = await Promise.race([readPromise, abortPromise]);
+                if (done) break;
+                const chunk = decoder.decode(value, { stream: true });
+                for (const line of chunk.split('\n')) {
+                    if (!line.startsWith('data:')) continue;
+                    const data = line.slice(5).trim();
+                    if (data === '[DONE]') continue;
+                    try {
+                        const parsed = JSON.parse(data);
+                        const delta = parsed?.choices?.[0]?.delta?.content || '';
+                        full += delta;
+                    } catch (_) {}
+                }
+            }
+        } catch (err) {
+            reader.cancel().catch(() => {});
+            cleanup();
+            throw new Error('请求已中止（超时或用户操作）');
+        }
+        cleanup();
+        if (full.trim()) return full.trim();
+        throw new Error('酒馆主预设调用失败：流式响应内容为空');
+    }
+
+    let data;
+    try {
+        data = await resp.json();
+    } finally {
+        cleanup();
+    }
+
+    if (data?.error) {
+        const message = data.error.message || data.response || 'API 返回错误';
+        throw new Error(message);
+    }
+
+    const result = cleanUpMessage({
+        getMessage: extractMessageFromData(data, 'openai'),
+        isImpersonate: false,
+        isContinue: false,
+        displayIncompleteSentences: true,
+        includeUserPromptBias: false,
+        trimNames: false,
+        trimWrongNames: false,
+    });
 
     if (typeof result === 'string' && result.trim()) return result.trim();
     throw new Error('酒馆主预设调用失败：返回内容为空');
