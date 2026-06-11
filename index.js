@@ -2298,6 +2298,11 @@ function niExtractChatCompletionTextFromRaw(raw) {
     return full;
 }
 
+function niHasLengthFinishReason(data) {
+    const choices = Array.isArray(data?.choices) ? data.choices : [];
+    return choices.some(choice => String(choice?.finish_reason || '').toLowerCase() === 'length');
+}
+
 async function niReadChatCompletionStream(resp, controller, cleanup, emptyMessage = '流式响应内容为空') {
     const reader = resp.body?.getReader();
     if (!reader) {
@@ -2310,6 +2315,7 @@ async function niReadChatCompletionStream(resp, controller, cleanup, emptyMessag
     let full = '';
     let raw = '';
     let pending = '';
+    let hitLengthLimit = false;
 
     const processLine = (line) => {
         const trimmed = String(line || '').trim();
@@ -2317,7 +2323,9 @@ async function niReadChatCompletionStream(resp, controller, cleanup, emptyMessag
         const payload = trimmed.slice(5).trim();
         if (!payload || payload === '[DONE]') return;
         try {
-            full += niExtractChatCompletionText(JSON.parse(payload));
+            const data = JSON.parse(payload);
+            if (niHasLengthFinishReason(data)) hitLengthLimit = true;
+            full += niExtractChatCompletionText(data);
         } catch (_) {}
     };
 
@@ -2358,6 +2366,7 @@ async function niReadChatCompletionStream(resp, controller, cleanup, emptyMessag
     }
 
     cleanup?.();
+    if (hitLengthLimit) throw new Error('AI 返回被长度截断');
     if (full.trim()) return full.trim();
 
     const fallback = niExtractChatCompletionTextFromRaw(raw);
@@ -2432,6 +2441,7 @@ async function niGenerateWithTavernMainPreset(messages, { responseLength = null 
         const message = data.error.message || data.response || 'API 返回错误';
         throw new Error(message);
     }
+    if (niHasLengthFinishReason(data)) throw new Error('AI 返回被长度截断');
 
     const result = cleanUpMessage({
         getMessage: niExtractChatCompletionText(data),
@@ -3778,7 +3788,10 @@ function renderCharacters() {
               <div class="ni-char-head">
                 <div class="ni-char-av">${niEscHtml(av)}</div>
                 <div>
-                  <div class="ni-char-name">${niEscHtml(c.name)}</div>
+                  <div class="ni-char-name-row">
+                    <div class="ni-char-name">${niEscHtml(c.name)}</div>
+                    <button class="ni-char-ai-one-btn" data-char-idx="${i}" title="AI 更新此角色人设">A</button>
+                  </div>
                   <div class="ni-char-role-row"><div class="ni-char-role">${niEscHtml(c.role || '其他')}</div>${c.gender ? `<div class="ni-char-gender">${niEscHtml(c.gender)}</div>` : ''}</div>
                   ${(() => { const fs = getCharFirstStage(c); return fs != null ? `<button class="ni-char-stage-tag" data-stage-idx="${fs}">初次登场：第 ${fs} 阶段</button>` : ''; })()}
                 </div>
@@ -4767,13 +4780,13 @@ const _vecQueue = {
 // 自动生成阶段标题和概括
 // ============================================================
 // 角色/阶段概括专用：强制串行，不受 apiConcurrency 影响
-async function callApiSeq(messages) {
+async function callApiSeq(messages, { responseLength = 1000 } = {}) {
     // 等待限速槽位（每分钟最多 N 次，0=不限）
     await _apiQueue.acquire();
     const cfg = extension_settings[EXT_NAME];
 
     if (niUseTavernGlobalPreset(cfg)) {
-        return await niGenerateWithTavernMainPreset(messages, { responseLength: 1000 });
+        return await niGenerateWithTavernMainPreset(messages, { responseLength });
     }
 
     messages = niApplyGlobalPromptsToMessages(messages, cfg);
@@ -4783,7 +4796,7 @@ async function callApiSeq(messages) {
         chat_completion_source: 'openai',
         messages,
         model: cfg.cleanModel,
-        max_tokens: 1000,
+        max_tokens: responseLength,
         temperature: 0.3,
         stream: useStream,
         reverse_proxy: cfg.cleanUrl,
@@ -4801,6 +4814,7 @@ async function callApiSeq(messages) {
     }
 
     const json = await resp.json();
+    if (niHasLengthFinishReason(json)) throw new Error('AI 返回被长度截断');
     const text = json?.choices?.[0]?.message?.content || json?.choices?.[0]?.text ||
                  json?.content?.[0]?.text || json?.content || json?.output || null;
     if (text && typeof text === 'string' && text.trim()) return text.trim();
@@ -4811,6 +4825,144 @@ async function callApiSeq(messages) {
 // 手动触发：角色概括（串行，防重入）
 // ============================================================
 let _genCharsRunning = false;
+const NI_CHAR_AI_PROFILE_RETRIES = 3;
+const NI_CHAR_AI_PROFILE_RESPONSE_LENGTH = 2000;
+
+function niBuildCharAiProfilePrompt(c, recentChat, novelCtx) {
+    return `你是角色人设整理师。请为角色【${c.name}】生成当前状态的简短人设摘要。
+${recentChat ? `\n【当前对话记录（核心依据，优先参考）】\n${recentChat}\n` : ''}
+【原著剧情节点（背景参考，仅补充对话中未体现的基础信息）】
+${novelCtx}
+
+要求：
+- 只记录【${c.name}】本人在对话中有直接描写的内容；若该角色在对话中完全未出场，所有字段返回空字符串
+- 禁止将发生在其他角色身上的事件推断或转移到【${c.name}】身上
+- 禁止根据"其他角色对【${c.name}】做了某事"来推导【${c.name}】的当前状态，除非对话原文明确描写了【${c.name}】本人的当前状态
+- 原著节点仅用于补全对话中完全未涉及的基础背景，不得覆盖对话中已体现的新变化
+- 严格控制字数，按下面结构输出，不输出任何其他文字：
+{"identity":"身份背景15字内","appearance":"外貌10字内或空字符串","personality":"性格15字内","relations":"关系20字内或空字符串"}
+
+输出前暗中自检一次，不输出自检过程：
+- 是否只包含 identity、appearance、personality、relations 四个字段
+- 所有字段是否均为字符串，信息不足时是否输出空字符串
+- 是否只记录【${c.name}】本人在对话或原著节点中明确成立的信息
+- 是否没有 Markdown、代码块或结构外文本`;
+}
+
+function niBuildCharAiProfileContext() {
+    const allNodes = [
+        ...(S.plots.main  || []),
+        ...(S.plots.sub   || []),
+        ...(S.plots.pivot || []),
+    ];
+    const novelCtx = allNodes.map(p => `[${p.title}] ${p.body}`).slice(0, 80).join('\n');
+
+    const ctx = getContext?.();
+    const recentChat = (ctx?.chat || [])
+        .slice(-20)
+        .filter(m => m.mes && !m.is_user)
+        .map(m => `${m.name || 'AI'}：${m.mes}`)
+        .join('\n')
+        .slice(0, 50000);
+
+    return { novelCtx, recentChat };
+}
+
+function niParseCharAiProfile(raw) {
+    const text = String(raw || '').replace(/```json|```/g, '').trim();
+    if (!text) throw new Error('AI 返回为空');
+
+    let parsed;
+    try {
+        parsed = JSON.parse(text);
+    } catch (_) {
+        throw new Error('AI 返回不是完整 JSON');
+    }
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('AI 返回 JSON 结构异常');
+    }
+
+    return {
+        identity:    String(parsed.identity    || ''),
+        appearance:  String(parsed.appearance  || ''),
+        personality: String(parsed.personality || ''),
+        relations:   String(parsed.relations   || ''),
+    };
+}
+
+async function niGenerateCharAiProfileWithRetry(i, charCtx, onRetry = null) {
+    const c = S.characters[i];
+    if (!c) throw new Error('角色不存在');
+
+    let lastErr = null;
+    for (let attempt = 0; attempt <= NI_CHAR_AI_PROFILE_RETRIES; attempt++) {
+        try {
+            const raw = await callApiSeq([{
+                role: 'user',
+                content: niBuildCharAiProfilePrompt(c, charCtx.recentChat, charCtx.novelCtx),
+            }], { responseLength: NI_CHAR_AI_PROFILE_RESPONSE_LENGTH });
+            return niParseCharAiProfile(raw);
+        } catch (e) {
+            lastErr = e;
+            if (attempt < NI_CHAR_AI_PROFILE_RETRIES) {
+                onRetry?.(attempt + 1, e);
+                await new Promise(resolve => setTimeout(resolve, 250));
+            }
+        }
+    }
+
+    throw new Error(`已重试 ${NI_CHAR_AI_PROFILE_RETRIES} 次仍失败：${lastErr?.message || lastErr || '未知错误'}`);
+}
+
+function niApplyCharAiProfile(i, profile) {
+    const c2 = S.characters[i];
+    if (!c2) return;
+
+    c2.aiProfile = {
+        identity:    profile.identity    || '',
+        appearance:  profile.appearance  || '',
+        personality: profile.personality || '',
+        relations:   profile.relations   || '',
+    };
+
+    const detailEl = q(`#ni-cbio-${i}`);
+    if (detailEl) {
+        const rawEyeOn2 = c2.showRaw !== false;
+        const detailInner2 = niRenderRawDetail(c2, i);
+        detailEl.innerHTML = rawEyeOn2 ? (detailInner2 || '<span style="opacity:.5">暂无人设</span>') : '（原始人设已关闭注入）';
+    }
+
+    let aipEl = q(`#ni-caip-${i}`);
+    if (!aipEl) {
+        const card = q(`#ni-cc-${i}`);
+        if (card) {
+            aipEl = document.createElement('div');
+            aipEl.className = 'ni-char-ai-profile';
+            aipEl.id = `ni-caip-${i}`;
+            card.querySelector('.ni-char-detail')?.after(aipEl);
+        }
+    }
+    if (aipEl) {
+        const aiEyeOn = c2.showAi !== false;
+        aipEl.className = 'ni-char-ai-profile';
+        aipEl.style.display = '';
+        aipEl.innerHTML = `
+          <div class="ni-char-ai-profile-hdr">
+            <span class="ni-char-ai-profile-lbl"><i class="ti ti-sparkles"></i>AI 实时人设</span>
+            <button class="ni-char-eye ni-char-eye-ai${aiEyeOn ? ' on' : ''}" data-char-idx="${i}" title="AI人设注入开/关"><i class="ti ${aiEyeOn ? 'ti-eye' : 'ti-eye-off'}"></i></button>
+          </div>
+          <div class="ni-char-ai-body">${aiEyeOn ? niRenderAiFields(c2.aiProfile) : '（已关闭注入）'}</div>`;
+    }
+
+    ['identity', 'appearance', 'personality', 'relations'].forEach(key => {
+        const el = q(`#ni-cta-ai-${key}-${i}`);
+        if (el) el.value = c2.aiProfile[key] || '';
+    });
+    const aiArea = q(`#ni-cef-ai-${i}`);
+    if (aiArea) aiArea.style.display = 'block';
+}
+
 async function niGenCharsManual(silent = false, skipIndices = null) {
     if (!S.cleanDone || !S.characters.length) {
         if (!silent) alert('请先完成清洗，生成角色数据后再更新人设');
@@ -4828,25 +4980,10 @@ async function niGenCharsManual(silent = false, skipIndices = null) {
     if (prog) prog.style.display = 'flex';
     if (card) card.classList.add('ni-has-prog');
 
-    // 清洗文本块（用于人设背景）
-    const allNodes = [
-        ...(S.plots.main  || []),
-        ...(S.plots.sub   || []),
-        ...(S.plots.pivot || []),
-    ];
-    const novelCtx = allNodes.map(p => `[${p.title}] ${p.body}`).slice(0, 80).join('\n');
-
-    // 最近对话（用于实时更新）
-    const ctx = getContext?.();
-    const recentChat = (ctx?.chat || [])
-        .slice(-20)
-        .filter(m => m.mes && !m.is_user)
-        .map(m => `${m.name || 'AI'}：${m.mes}`)
-        .join('\n')
-        .slice(0, 50000);
-
+    const charCtx = niBuildCharAiProfileContext();
     const enabledIndices = S.characters.map((c, i) => c.enabled ? i : -1).filter(i => i !== -1 && !(skipIndices && skipIndices.has(i)));
     const total = enabledIndices.length;
+    const failures = [];
 
     for (let ei = 0; ei < total; ei++) {
         const i = enabledIndices[ei];
@@ -4854,84 +4991,80 @@ async function niGenCharsManual(silent = false, skipIndices = null) {
         if (note) note.textContent = `角色 ${ei + 1}/${total}：${c.name}`;
         if (bar)  bar.style.width = `${Math.round((ei / total) * 92)}%`;
         try {
-            const raw = await callApiSeq([{
-                role: 'user',
-                content: `你是角色人设整理师。请为角色【${c.name}】生成当前状态的简短人设摘要。
-${recentChat ? `\n【当前对话记录（核心依据，优先参考）】\n${recentChat}\n` : ''}
-【原著剧情节点（背景参考，仅补充对话中未体现的基础信息）】
-${novelCtx}
-
-要求：
-- 只记录【${c.name}】本人在对话中有直接描写的内容；若该角色在对话中完全未出场，所有字段返回空字符串
-- 禁止将发生在其他角色身上的事件推断或转移到【${c.name}】身上
-- 禁止根据"其他角色对【${c.name}】做了某事"来推导【${c.name}】的当前状态，除非对话原文明确描写了【${c.name}】本人的当前状态
-- 原著节点仅用于补全对话中完全未涉及的基础背景，不得覆盖对话中已体现的新变化
-- 严格控制字数，按下面结构输出，不输出任何其他文字：
-{"identity":"身份背景15字内","appearance":"外貌10字内或空字符串","personality":"性格15字内","relations":"关系20字内或空字符串"}
-
-输出前暗中自检一次，不输出自检过程：
-- 是否只包含 identity、appearance、personality、relations 四个字段
-- 所有字段是否均为字符串，信息不足时是否输出空字符串
-- 是否只记录【${c.name}】本人在对话或原著节点中明确成立的信息
-- 是否没有 Markdown、代码块或结构外文本`,
-            }]);
-            const parsed = JSON.parse(raw.replace(/```json|```/g, '').trim());
-            const c2 = S.characters[i];
-            // 以对象形式存储，不覆盖清洗字段
-            c2.aiProfile = {
-                identity:    parsed.identity    || '',
-                appearance:  parsed.appearance  || '',
-                personality: parsed.personality || '',
-                relations:   parsed.relations   || '',
-            };
-
-            // 刷新该角色卡展示
-            const detailEl = q(`#ni-cbio-${i}`);
-            if (detailEl) {
-                const c2raw = S.characters[i];
-                const rawEyeOn2 = c2raw.showRaw !== false;
-                const detailInner2 = niRenderRawDetail(c2raw, i);
-                detailEl.innerHTML = rawEyeOn2 ? (detailInner2 || '<span style="opacity:.5">暂无人设</span>') : '（原始人设已关闭注入）';
-            }
-            // 更新 aiProfile 显示区
-            let aipEl = q(`#ni-caip-${i}`);
-            if (!aipEl) {
-                const card = q(`#ni-cc-${i}`);
-                if (card) {
-                    aipEl = document.createElement('div');
-                    aipEl.className = 'ni-char-ai-profile';
-                    aipEl.id = `ni-caip-${i}`;
-                    card.querySelector('.ni-char-detail')?.after(aipEl);
-                }
-            }
-            if (aipEl) {
-                aipEl.className = 'ni-char-ai-profile';
-                aipEl.innerHTML = `
-                  <div class="ni-char-ai-profile-hdr">
-                    <span class="ni-char-ai-profile-lbl"><i class="ti ti-sparkles"></i>AI 实时人设</span>
-                    <button class="ni-char-eye ni-char-eye-ai on" data-char-idx="${i}" title="AI人设注入开/关"><i class="ti ti-eye"></i></button>
-                  </div>
-                  <div class="ni-char-ai-body">${niRenderAiFields(c2.aiProfile)}</div>`;
-            }
+            const profile = await niGenerateCharAiProfileWithRetry(i, charCtx, (retryNo, err) => {
+                if (note) note.textContent = `角色 ${ei + 1}/${total}：${c.name}（重试 ${retryNo}/${NI_CHAR_AI_PROFILE_RETRIES}）`;
+                console.warn(`[NI] 角色 ${c.name} 人设第 ${retryNo} 次重试：`, err);
+            });
+            niApplyCharAiProfile(i, profile);
         } catch (e) {
             console.warn(`[NI] 角色 ${c.name} 人设更新失败:`, e);
+            failures.push(`${c.name}：${e.message || e}`);
         }
     }
 
     if (bar)  { bar.style.width = '100%'; bar.classList.add('g'); }
-    if (note) { note.textContent = `全部 ${total} 位角色已更新`; note.classList.add('g'); }
+    if (note) { note.textContent = failures.length ? `${failures.length} 位角色更新失败` : `全部 ${total} 位角色已更新`; note.classList.add(failures.length ? 'bad' : 'g'); }
     setTimeout(() => {
         if (prog) prog.style.display = 'none';
         if (bar)  { bar.style.width = '0%'; bar.classList.remove('g'); }
-        if (note) { note.textContent = ''; note.classList.remove('g'); }
+        if (note) { note.textContent = ''; note.classList.remove('g', 'bad'); }
         if (card) card.classList.remove('ni-has-prog');
     }, 2500);
 
     niSaveSettings();
     if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-sparkles"></i>AI 更新人设'; }
     _genCharsRunning = false;
+
+    if (failures.length && !silent) {
+        alert(`AI 实时人设更新失败：\n${failures.slice(0, 5).join('\n')}${failures.length > 5 ? `\n……另有 ${failures.length - 5} 位失败` : ''}`);
+    }
 }
 window.niGenCharsManual = niGenCharsManual;
+
+async function niGenOneCharManual(i) {
+    if (!S.cleanDone || !S.characters.length) {
+        alert('请先完成清洗，生成角色数据后再更新人设');
+        return;
+    }
+    if (!S.characters[i]) {
+        alert('角色不存在，无法更新人设');
+        return;
+    }
+    if (_genCharsRunning) {
+        alert('AI 人设正在更新中，请稍后再试');
+        return;
+    }
+
+    _genCharsRunning = true;
+    const c = S.characters[i];
+    const btn = q(`.ni-char-ai-one-btn[data-char-idx="${i}"]`);
+    const oldHtml = btn?.innerHTML;
+    if (btn) {
+        btn.disabled = true;
+        btn.classList.add('loading');
+        btn.innerHTML = '<i class="ti ti-loader"></i>';
+    }
+
+    try {
+        const charCtx = niBuildCharAiProfileContext();
+        const profile = await niGenerateCharAiProfileWithRetry(i, charCtx, (retryNo, err) => {
+            console.warn(`[NI] 角色 ${c.name} 人设第 ${retryNo} 次重试：`, err);
+        });
+        niApplyCharAiProfile(i, profile);
+        niSaveSettings();
+    } catch (e) {
+        console.warn(`[NI] 角色 ${c.name} 人设更新失败:`, e);
+        alert(`角色「${c.name}」AI 实时人设更新失败：${e.message || e}`);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.classList.remove('loading');
+            btn.innerHTML = oldHtml || 'A';
+        }
+        _genCharsRunning = false;
+    }
+}
+window.niGenOneCharManual = niGenOneCharManual;
 
 // ============================================================
 // 手动触发：阶段标题 & 概括（串行，防重入，含进度条）
@@ -7905,6 +8038,11 @@ jQuery(async () => {
 
     // 阶段/角色 AI 生成按钮
     $app.on('click', '#ni-btn-gen-chars',  () => niGenCharsManual());
+    $app.on('click', '.ni-char-ai-one-btn', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        niGenOneCharManual(Number(this.dataset.charIdx));
+    });
     $app.on('click', '#ni-btn-gen-stages',       () => niGenStagesManual(false));
     $app.on('click', '#ni-btn-gen-stages-empty', () => niGenStagesManual(true));
 
