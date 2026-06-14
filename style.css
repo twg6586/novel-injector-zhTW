@@ -14,6 +14,9 @@
   position: relative;
   background: var(--ni-surface-bg, var(--color-background-tertiary));
   color: var(--ni-surface-text, var(--color-text-primary));
+  --ni-plot-node-bg: var(--color-background-primary);
+  --ni-plot-node-head-bg: var(--color-background-secondary);
+  --ni-plot-node-body-bg: var(--color-background-primary);
 }
 .ni-app.ni-surface-tavern {
   --ni-surface-bg: transparent;
@@ -26,6 +29,9 @@
   --color-text-tertiary: var(--SmartThemeBodyColor, #ddd);
   --color-border-secondary: var(--SmartThemeBorderColor, rgba(255, 255, 255, .2));
   --color-border-tertiary: var(--SmartThemeBorderColor, rgba(255, 255, 255, .12));
+  --ni-plot-node-bg: var(--SmartThemeBlurTintColor, var(--color-background-secondary));
+  --ni-plot-node-head-bg: var(--SmartThemeBlurTintColor, var(--color-background-secondary));
+  --ni-plot-node-body-bg: var(--SmartThemeBlurTintColor, var(--color-background-secondary));
   background: transparent;
   color: var(--SmartThemeBodyColor, #ddd);
 }
@@ -774,7 +780,29 @@
 .ni-plot-del-mode .ni-tl-item.ni-plot-selected { outline-color: var(--ni-primary, #A0445E); background: var(--ni-primary-soft-2, #FBF2F6); }
 /* 编辑模式：事件卡右上角显示编辑图标 */
 .ni-plot-edit-mode .ni-plot-item,
-.ni-plot-edit-mode .ni-tl-item { cursor: pointer; outline: 2px dashed #B0C4DE; outline-offset: 2px; border-radius: 6px; }
+.ni-plot-edit-mode .ni-tl-item { cursor: pointer; outline: none; border-radius: 6px; }
+.ni-plot-edit-mode .ni-plot-item,
+.ni-plot-edit-mode .ni-tl-content {
+  background: var(--ni-primary-alpha-08, var(--ni-plot-node-bg));
+  box-shadow:
+    inset 0 0 0 2px var(--ni-primary, var(--color-primary, currentColor)),
+    0 0 0 2px var(--ni-primary-alpha-15, transparent) !important;
+}
+.ni-plot-edit-mode .ni-plot-head,
+.ni-plot-edit-mode .ni-tl-head {
+  border-color: var(--ni-primary, var(--color-primary, currentColor)) !important;
+  background: var(--ni-primary-alpha-12, var(--ni-plot-node-head-bg));
+}
+.ni-plot-edit-mode .ni-plot-body,
+.ni-plot-edit-mode .ni-tl-body {
+  border-color: var(--ni-primary-alpha-40, var(--ni-primary, currentColor)) !important;
+  background: var(--ni-primary-alpha-07, var(--ni-plot-node-body-bg));
+}
+.ni-plot-tab-actions .ni-char-edit-btn.ni-mode-on {
+  color: var(--ni-primary-on, var(--color-background-primary));
+  background: var(--ni-primary, var(--color-primary, currentColor));
+  border-color: var(--ni-primary, var(--color-primary, currentColor));
+}
 .ni-plot-type-btn { padding: 2px 5px !important; font-size: 11px !important; }
 .ni-tab { padding: 2px 5px; font-size: 12px; font-weight: 500; border: .5px solid var(--color-border-secondary); border-radius: 6px; background: transparent; color: var(--color-text-secondary); cursor: pointer; min-height: 26px; }
 .ni-tab.on { background: var(--ni-tab-active-bg, var(--ni-primary-soft, #F5E6EC)); color: var(--ni-tab-active-text, var(--ni-primary-soft-text, #8B3A50)); border-color: var(--ni-tab-active-border, var(--ni-primary-border-strong, #E0C0CA)); }
@@ -782,19 +810,39 @@
 .ni-tp.on { display: block; }
 
 /* ---- Plot Items ---- */
-.ni-plot-item { border: .5px solid var(--color-border-tertiary); border-radius: 4px; overflow: hidden; margin-bottom: 6px; }
+.ni-plot-item { border: .5px solid var(--color-border-tertiary); border-radius: 4px; overflow: hidden; margin-bottom: 6px; position: relative; transition: background .14s, border-color .14s, box-shadow .14s, transform .14s, opacity .14s; }
 .ni-plot-item:last-child { margin-bottom: 0; }
-.ni-plot-item[draggable="true"] { cursor: default; }
-.ni-plot-item.ni-drag-ghost { opacity: .35; }
-.ni-plot-item.ni-drag-over { outline: 1.5px solid rgba(160,68,94,.5); outline-offset: 1px; }
+.ni-tp .ni-plot-item { background: var(--ni-plot-node-bg, var(--color-background-primary)); }
+.ni-plot-item[draggable="true"] { cursor: grab; }
+.ni-plot-item[draggable="true"]:active { cursor: grabbing; }
+.ni-plot-edit-mode .ni-plot-item[draggable="true"],
+.ni-plot-del-mode .ni-plot-item[draggable="true"] { cursor: pointer; }
+.ni-plot-item.ni-drag-ghost {
+  opacity: .68;
+  transform: scale(.995);
+  border-color: var(--ni-primary, var(--color-primary, currentColor)) !important;
+  box-shadow:
+    inset 0 0 0 2px var(--ni-primary, var(--color-primary, currentColor)),
+    0 4px 16px var(--ni-primary-alpha-15, transparent) !important;
+}
+.ni-plot-item.ni-drag-over {
+  outline: none;
+  border-color: var(--ni-primary, var(--color-primary, currentColor)) !important;
+  background: var(--ni-primary-alpha-08, var(--ni-plot-node-bg));
+  box-shadow:
+    inset 0 0 0 2px var(--ni-primary, var(--color-primary, currentColor)),
+    0 0 0 3px var(--ni-primary-alpha-15, transparent) !important;
+}
 .ni-plot-drag-handle { font-size: 14px; color: var(--color-text-tertiary); cursor: grab; flex-shrink: 0; opacity: .5; transition: opacity .15s; }
 .ni-plot-drag-handle:hover { opacity: 1; }
 .ni-plot-drag-handle:active { cursor: grabbing; }
 .ni-plot-head { display: flex; align-items: center; gap: 8px; padding: 9px 11px; cursor: pointer; background: var(--color-background-secondary); }
+.ni-tp .ni-plot-head { background: var(--ni-plot-node-head-bg, var(--color-background-secondary)); }
 .ni-plot-name { font-size: 13px; font-weight: 500; color: var(--color-text-primary); flex: 1; line-height: 1.4; }
 .ni-plot-chev { font-size: 14px; color: var(--color-text-tertiary); transition: transform .2s; flex-shrink: 0; }
 .ni-plot-item.open .ni-plot-chev { transform: rotate(180deg); }
 .ni-plot-body { display: none; padding: 10px 11px; border-top: .5px solid var(--color-border-tertiary); }
+.ni-tp .ni-plot-body { background: var(--ni-plot-node-body-bg, var(--color-background-primary)); }
 .ni-plot-item.open .ni-plot-body { display: block; }
 .ni-plot-txt { font-size: 12px; color: var(--color-text-secondary); line-height: 1.65; margin-bottom: 8px; }
 .ni-plot-meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -1421,8 +1469,40 @@
   user-select: none;
 }
 .ni-vec-stage-label:hover { background: var(--color-background-secondary); }
-.ni-vec-stage-label input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--ni-primary, #A0445E); margin: 0; outline: 1px solid var(--ni-primary-alpha-30, rgba(160, 68, 94, .3)); outline-offset: -1px; }
-.ni-vec-stage-label input[type="checkbox"]:checked { outline: none; }
+.ni-vec-stage-label input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+  pointer-events: none;
+}
+.ni-vec-stage-box {
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  border: .5px solid var(--ni-primary-alpha-30, rgba(160, 68, 94, .3));
+  background: var(--color-background-primary);
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background .15s, border-color .15s, box-shadow .15s;
+}
+.ni-vec-stage-box i {
+  font-size: 10px;
+  color: transparent;
+  transition: color .15s;
+}
+.ni-vec-stage-label input[type="checkbox"]:checked + .ni-vec-stage-box {
+  background: var(--ni-primary, #A0445E);
+  border-color: var(--ni-primary, #A0445E);
+  box-shadow: 0 0 0 2px var(--ni-primary-alpha-12, rgba(160, 68, 94, .12));
+}
+.ni-vec-stage-label input[type="checkbox"]:checked + .ni-vec-stage-box i {
+  color: var(--ni-primary-on, #F5E6EC);
+}
 .ni-vec-done-badge {
   font-size: 10px;
   padding: 1px 5px;
@@ -2008,6 +2088,9 @@ select.ni-modal-input {
   flex: 1;
   min-width: 0;
   padding-bottom: 10px;
+  position: relative;
+  border-radius: 4px;
+  transition: background .14s, box-shadow .14s;
 }
 .ni-tl-head {
   display: flex;
@@ -2016,7 +2099,7 @@ select.ni-modal-input {
   padding: 7px 8px;
   cursor: pointer;
   border-radius: 4px;
-  background: var(--color-background-secondary);
+  background: var(--ni-plot-node-head-bg, var(--color-background-secondary));
   border: .5px solid var(--color-border-tertiary);
 }
 .ni-tl-head:hover { background: var(--color-background-tertiary, #f5f5f5); }
@@ -2030,6 +2113,7 @@ select.ni-modal-input {
   border: .5px solid var(--color-border-tertiary);
   border-top: none;
   border-radius: 0 0 4px 4px;
+  background: var(--ni-plot-node-body-bg, var(--color-background-primary));
 }
 .ni-tl-item.open .ni-tl-body { display: block; }
 .ni-tl-item.open .ni-plot-chev { transform: rotate(180deg); }

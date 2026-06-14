@@ -3333,6 +3333,15 @@ function niSyncPlotActionButtons(exitModes = false) {
         if (_plotDelMode)  niTogglePlotDel();
         if (_plotEditMode) niTogglePlotEdit();
     }
+
+    if (delBtn) {
+        delBtn.classList.toggle('ni-mode-on', _plotDelMode && !isTimeline);
+        delBtn.setAttribute('aria-pressed', String(_plotDelMode && !isTimeline));
+    }
+    if (editBtn) {
+        editBtn.classList.toggle('ni-mode-on', _plotEditMode && !isTimeline);
+        editBtn.setAttribute('aria-pressed', String(_plotEditMode && !isTimeline));
+    }
 }
 
 function renderPlots() {
@@ -3497,7 +3506,7 @@ function renderPlotList(containerId, items, badgeCls, label) {
               '</div>'
             : '';
 
-        return `<div class="ni-plot-item" id="${id}" draggable="false" data-plot-type="${containerId}" data-plot-idx="${origIdx}" data-plot-pos="${i}" data-node-id="${niEscAttr(nodeId)}">
+        return `<div class="ni-plot-item" id="${id}" draggable="true" data-plot-type="${containerId}" data-plot-idx="${origIdx}" data-plot-pos="${i}" data-node-id="${niEscAttr(nodeId)}">
           <div class="ni-plot-head" data-plot-id="${id}">
             <i class="ti ti-grip-vertical ni-plot-drag-handle" title="拖拽排序"></i>
             <span class="ni-badge ${badgeCls}">${label}${i + 1}</span>
@@ -3534,20 +3543,13 @@ function niBindPlotDrag(container, containerId) {
     let dragSrc = null;
 
     container.querySelectorAll('.ni-plot-item').forEach(item => {
-        // 默认不可拖拽，仅通过手柄 mousedown 才临时启用，防止按住标题区域误触变灰
-        item.setAttribute('draggable', 'false');
+        item.setAttribute('draggable', 'true');
 
         const handle = item.querySelector('.ni-plot-drag-handle');
         if (handle) {
-            handle.addEventListener('mousedown', () => {
-                item.setAttribute('draggable', 'true');
-            });
-            handle.addEventListener('mouseup', () => {
-                item.setAttribute('draggable', 'false');
-            });
-
             // ── 手机端 Touch 拖拽支持 ──
             handle.addEventListener('touchstart', e => {
+                if (_plotEditMode || _plotDelMode) return;
                 e.stopPropagation();
                 dragSrc = item;
                 item.classList.add('ni-drag-ghost');
@@ -3587,8 +3589,7 @@ function niBindPlotDrag(container, containerId) {
         }
 
         item.addEventListener('dragstart', e => {
-            // 未经手柄启用则阻止拖拽
-            if (item.getAttribute('draggable') !== 'true') {
+            if (_plotEditMode || _plotDelMode) {
                 e.preventDefault();
                 return;
             }
@@ -3597,7 +3598,6 @@ function niBindPlotDrag(container, containerId) {
             e.dataTransfer.effectAllowed = 'move';
         });
         item.addEventListener('dragend', () => {
-            item.setAttribute('draggable', 'false');
             dragSrc = null;
             container.querySelectorAll('.ni-plot-item').forEach(el => {
                 el.classList.remove('ni-drag-ghost', 'ni-drag-over');
@@ -3922,7 +3922,9 @@ function niTogglePlotDel() {
     if (bar) bar.style.display = _plotDelMode ? 'flex' : 'none';
     ['ni-tp-timeline','ni-tp-main','ni-tp-sub','ni-tp-pivot'].forEach(id => {
         q(`#${id}`)?.classList.toggle('ni-plot-del-mode', _plotDelMode);
+        q(`#${id}`)?.classList.remove('ni-plot-edit-mode');
     });
+    niSyncPlotActionButtons(false);
 }
 
 function niTogglePlotEdit() {
@@ -3933,7 +3935,9 @@ function niTogglePlotEdit() {
     if (bar) bar.style.display = 'none';
     ['ni-tp-timeline','ni-tp-main','ni-tp-sub','ni-tp-pivot'].forEach(id => {
         q(`#${id}`)?.classList.toggle('ni-plot-edit-mode', _plotEditMode);
+        q(`#${id}`)?.classList.remove('ni-plot-del-mode');
     });
+    niSyncPlotActionButtons(false);
 }
 
 function niConfirmPlotDel() {
@@ -6024,6 +6028,7 @@ function niRenderVecStageSelector() {
         const done = S.stageVecDone[idx];
         return `<label class="ni-vec-stage-label">
           <input type="checkbox" class="ni-vec-stage-chk" value="${idx}"${!done ? ' checked' : ''}>
+          <span class="ni-vec-stage-box"><i class="ti ti-check"></i></span>
           <span class="ni-vec-stage-name">第 ${idx} 阶段 · ${niEscHtml(title)}</span>
           ${done ? '<span class="ni-vec-done-badge">已向量</span>' : ''}
         </label>`;
