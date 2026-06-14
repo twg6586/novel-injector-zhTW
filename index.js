@@ -6117,6 +6117,28 @@ function niGetVectorSourceChunkIdx(chunk) {
     return Number.isFinite(n) ? n : null;
 }
 
+function niRecallStoryOrder(chunk) {
+    const sourceChunkIdx = niGetVectorSourceChunkIdx(chunk);
+    if (sourceChunkIdx != null) return sourceChunkIdx;
+    const stageIdx = niFiniteNumber(chunk?.stageIdx, 0);
+    const chunkIdx = niFiniteNumber(chunk?.chunkIdx, 0);
+    return stageIdx * NI_PLOT_CHUNK_ORDER_STEP + chunkIdx;
+}
+
+function niCompareRecallStoryOrder(a, b) {
+    return niRecallStoryOrder(a) - niRecallStoryOrder(b) ||
+        niFiniteNumber(a?.stageIdx, 0) - niFiniteNumber(b?.stageIdx, 0) ||
+        niFiniteNumber(a?.chunkIdx, 0) - niFiniteNumber(b?.chunkIdx, 0) ||
+        niFiniteNumber(b?.score, 0) - niFiniteNumber(a?.score, 0);
+}
+
+function niSelectRecallCandidatesInStoryOrder(candidates, topK) {
+    return candidates
+        .sort((a, b) => b.score - a.score)
+        .slice(0, topK)
+        .sort(niCompareRecallStoryOrder);
+}
+
 function niTbLightRecallCandidateAllowed(chunk, lightCtx) {
     if (!lightCtx) return true;
     const sourceChunkIdx = niGetVectorSourceChunkIdx(chunk);
@@ -6213,12 +6235,11 @@ async function recallRelevantWeighted(weightedQueries, stageList, opts = {}) {
         .filter(c => enabledStages.has(c.stageIdx))
         .filter(c => niTbLightRecallCandidateAllowed(c, lightCtx))
         .map(c => ({ ...c, score: cosineSim(combined, c.vector) }))
-        .filter(c => c.score >= thresh)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, topK);
+        .filter(c => c.score >= thresh);
 
     if (!candidates.length) return '';
-    return niApplyTbLightRecallCut(candidates.map(c => c.text).join('\n\n---\n\n'), lightCtx);
+    const orderedCandidates = niSelectRecallCandidatesInStoryOrder(candidates, topK);
+    return niApplyTbLightRecallCut(orderedCandidates.map(c => c.text).join('\n\n---\n\n'), lightCtx);
 }
 
 async function recallRelevant(queryText, stageList) {
@@ -6248,12 +6269,11 @@ async function recallRelevant(queryText, stageList) {
     const candidates = allChunks
         .filter(c => enabledStages.has(c.stageIdx))
         .map(c => ({ ...c, score: cosineSim(queryVec, c.vector) }))
-        .filter(c => c.score >= thresh)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, topK);
+        .filter(c => c.score >= thresh);
 
     if (!candidates.length) return '';
-    return candidates.map(c => c.text).join('\n\n---\n\n');
+    const orderedCandidates = niSelectRecallCandidatesInStoryOrder(candidates, topK);
+    return orderedCandidates.map(c => c.text).join('\n\n---\n\n');
 }
 
 // ============================================================
