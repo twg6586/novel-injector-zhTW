@@ -2769,11 +2769,6 @@ async function niStartClean(options = {}) {
         titleNote.classList.toggle('g', !hasError);
     }
 
-    if (hasError) {
-        q('#ni-btn-retry').style.display = 'flex';
-        q('#ni-btn-retry').innerHTML = '<i class="ti ti-refresh"></i>重试失败分段';
-    }
-
     S.cleanDone = doneCount > 0;
     S.cleanRunning = false;
     niSyncCleanButtonState();
@@ -2794,12 +2789,9 @@ async function niStartClean(options = {}) {
 }
 window.niStartClean = niStartClean;
 
-// 重试失败分段
+// 续跑未完成分段
 async function niRetryFailed() {
-    // 将 error 状态重置为 pending，然后重跑
-    S.chunkStatus = S.chunkStatus.map(s => s === 'error' ? 'pending' : s);
-    renderChunkList();
-    await niStartClean();
+    await niHandleCleanButtonClick(false);
 }
 window.niRetryFailed = niRetryFailed;
 
@@ -6856,7 +6848,7 @@ function niCleanProgressStats() {
         running,
         pending,
         hasAnyProgress: done > 0 || error > 0 || running > 0,
-        isPartial: total > 0 && done > 0 && done < total,
+        isPartial: total > 0 && (done > 0 || error > 0 || running > 0) && done < total,
         isComplete: total > 0 && done === total && error === 0 && running === 0,
     };
 }
@@ -6892,7 +6884,7 @@ function niSyncCleanProgressHint(stats = niCleanProgressStats()) {
         const failedText = stats.error ? `，${stats.error} 段失败` : '';
         titleProg.style.display = 'flex';
         cpCard?.classList.add('ni-has-prog');
-        titleNote.textContent = `已完成 ${stats.done}/${stats.total} 段${failedText}，左键重新，右键续跑`;
+        titleNote.textContent = `已完成 ${stats.done}/${stats.total} 段${failedText}，左边重新，右边续跑`;
         titleBar.style.width = `${Math.round((stats.done / stats.total) * 100)}%`;
     } else if (stats.isComplete) {
         titleProg.style.display = 'flex';
@@ -6911,22 +6903,30 @@ function niSyncCleanProgressHint(stats = niCleanProgressStats()) {
 
 function niSyncCleanButtonState() {
     const btn = q('#ni-btn-clean');
+    const resumeBtn = q('#ni-btn-retry');
     if (!btn) return;
     const stats = niCleanProgressStats();
     const disabled = !S.fileLoaded || S.cleanRunning || stats.total === 0;
 
     if (stats.isPartial) {
         setBtn('#ni-btn-clean', disabled, '<i class="ti ti-refresh"></i>重新清洗');
-        btn.title = `已完成 ${stats.done}/${stats.total} 段。左键重新清洗；右键续跑清洗。`;
+        btn.title = `已完成 ${stats.done}/${stats.total} 段。左侧按钮重新清洗；右侧按钮续跑清洗。`;
         btn.dataset.niPartialClean = '1';
+        if (resumeBtn) {
+            resumeBtn.style.display = S.cleanRunning ? 'none' : 'inline-flex';
+            resumeBtn.title = `从当前进度继续清洗，已完成段会自动跳过。`;
+            setBtn('#ni-btn-retry', disabled, '<i class="ti ti-player-play"></i>续跑清洗');
+        }
     } else if (stats.isComplete) {
         setBtn('#ni-btn-clean', disabled, '<i class="ti ti-check"></i>清洗完成');
         btn.title = `已完成 ${stats.total}/${stats.total} 段。`;
         btn.dataset.niPartialClean = '0';
+        if (resumeBtn) resumeBtn.style.display = 'none';
     } else {
         setBtn('#ni-btn-clean', disabled, '<i class="ti ti-player-play"></i>开始全自动清洗');
         btn.title = '开始清洗当前小说';
         btn.dataset.niPartialClean = '0';
+        if (resumeBtn) resumeBtn.style.display = 'none';
     }
     niSyncCleanProgressHint(stats);
 }
@@ -8017,7 +8017,7 @@ jQuery(async () => {
         e.preventDefault();
         niHandleCleanButtonClick(false);
     });
-    $app.on('click', '#ni-btn-retry', () => niRetryFailed());
+    $app.on('click', '#ni-btn-retry', () => niHandleCleanButtonClick(false));
     $app.on('click', '#ni-btn-skip',  () => niSkipChunk());
     $app.on('click', '#ni-btn-pause', () => niPauseClean());
     $app.on('click', '.ni-chunk-run-btn', function() {

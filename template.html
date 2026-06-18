@@ -42,6 +42,9 @@
           <button class="ni-btn ni-btn-p ni-btn-inline" id="ni-btn-clean" disabled>
             <i class="ti ti-player-play"></i>开始全自动清洗
           </button>
+          <button class="ni-btn ni-btn-ghost ni-btn-inline" id="ni-btn-retry" style="display:none">
+            <i class="ti ti-player-play"></i>续跑清洗
+          </button>
           <!-- 运行态：跳过 + 暂停（清洗中替换大按钮位置） -->
           <button class="ni-ctrl-btn ni-ctrl-skip ni-btn-inline" id="ni-btn-skip" style="display:none">
             <i class="ti ti-player-skip-forward"></i>跳过本段
@@ -95,9 +98,6 @@
             <button class="ni-pt-reset" id="ni-pt-reset" title="恢复默认提示词"><i class="ti ti-rotate"></i></button>
           </div>
         </div>
-        <button class="ni-btn ni-btn-ghost" id="ni-btn-retry" style="display:none;margin-top:6px">
-          <i class="ti ti-refresh"></i>重试失败分段
-        </button>
       </div>
 
       <!-- Style Card -->

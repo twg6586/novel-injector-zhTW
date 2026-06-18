@@ -474,7 +474,8 @@
 
 /* 内联在 tool-row 里的主操作按钮 */
 .ni-btn-inline {
-  flex: 1;
+  flex: 1 1 0;
+  width: auto;
   min-width: 80px;
   margin-top: 0;
   min-height: 34px;
