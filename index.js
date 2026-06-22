@@ -627,6 +627,9 @@ const DEFAULT_SETTINGS = {
     devInjPos: 2,    // 默认主提示前，作为分支现实约束
     devInjDepth: 0,
     devInjRole: 0,
+    devAutoUpdateEnabled: false,
+    devAutoUpdateEvery: 10,
+    devManualMsgCount: 10,
     rawInjMode: "nodes",  // "nodes"=剧情节点 | "compressed"=压缩原文
     globalPromptSource: 'builtin', // builtin=内置提示词 tavern=跟随酒馆主预设 none=不使用
     globalPrompt: GLOBAL_PROMPT,
@@ -724,6 +727,8 @@ const S = {
     // 文风
     styleGuide: '',         // 生成的文风执行指南文本
     deviationGuide: '',     // 当前偏差注入文本
+    devRunning: false,
+    devAutoLastFloor: null,
 
     // 注入
 };
@@ -1287,6 +1292,9 @@ function niSaveSettings() {
     cfg.devInjPos   = niCfgInt('#ni-dev-inj-pos', DEFAULT_SETTINGS.devInjPos);
     cfg.devInjDepth = niCfgInt('#ni-dev-inj-depth', DEFAULT_SETTINGS.devInjDepth);
     cfg.devInjRole  = niCfgInt('#ni-dev-inj-role', DEFAULT_SETTINGS.devInjRole);
+    cfg.devAutoUpdateEnabled = q('#ni-dev-auto-enabled')?.checked ?? (cfg.devAutoUpdateEnabled ?? DEFAULT_SETTINGS.devAutoUpdateEnabled);
+    cfg.devAutoUpdateEvery = niCfgBoundInt('#ni-dev-auto-every', DEFAULT_SETTINGS.devAutoUpdateEvery, 1, 9999);
+    cfg.devManualMsgCount = niCfgBoundInt('#ni-dev-manual-msg-count', DEFAULT_SETTINGS.devManualMsgCount, 1, 200);
     cfg.rawInjMode  = q('#ni-raw-inj-mode')?.value ?? DEFAULT_SETTINGS.rawInjMode;
     cfg.chunkKb     = parseInt(q('#ni-chunk-kb')?.value) || DEFAULT_SETTINGS.chunkKb;
     cfg.customPrompt    = q('#ni-pt-content')?.value || CLEAN_PROMPT;
@@ -1382,6 +1390,11 @@ function syncSettingsToUI() {
     sv('#ni-dev-inj-pos', cfg.devInjPos  ?? DEFAULT_SETTINGS.devInjPos);
     sv('#ni-dev-inj-depth',cfg.devInjDepth?? DEFAULT_SETTINGS.devInjDepth);
     sv('#ni-dev-inj-role',cfg.devInjRole ?? DEFAULT_SETTINGS.devInjRole);
+    sv('#ni-dev-auto-every', niBoundIntValue(cfg.devAutoUpdateEvery, DEFAULT_SETTINGS.devAutoUpdateEvery, 1, 9999));
+    sv('#ni-dev-manual-msg-count', cfg.devManualMsgCount ?? DEFAULT_SETTINGS.devManualMsgCount);
+    const devAutoEl = q('#ni-dev-auto-enabled');
+    if (devAutoEl) devAutoEl.checked = !!(cfg.devAutoUpdateEnabled ?? DEFAULT_SETTINGS.devAutoUpdateEnabled);
+    niSyncDevAutoUI();
     sv('#ni-raw-inj-mode', cfg.rawInjMode  ?? DEFAULT_SETTINGS.rawInjMode);
     sv('#ni-global-head-inj-pos', cfg.globalHeadInjPos ?? DEFAULT_SETTINGS.globalHeadInjPos);
     sv('#ni-global-head-inj-depth', cfg.globalHeadInjDepth ?? DEFAULT_SETTINGS.globalHeadInjDepth);
@@ -1451,6 +1464,23 @@ const niCfgInt = (sel, fallback) => {
     const n = parseInt(q(sel)?.value, 10);
     return Number.isFinite(n) ? n : fallback;
 };
+const niBoundIntValue = (value, fallback, min = 0, max = 9999) => {
+    const n = parseInt(value, 10);
+    if (!Number.isFinite(n)) return fallback;
+    if (n < min) return fallback;
+    return Math.min(max, n);
+};
+const niCfgBoundInt = (sel, fallback, min = 0, max = 9999) => {
+    return niBoundIntValue(q(sel)?.value, fallback, min, max);
+};
+
+function niSyncDevAutoUI() {
+    const enabled = !!q('#ni-dev-auto-enabled')?.checked;
+    const input = q('#ni-dev-auto-every');
+    const row = input?.closest('.ni-dev-auto-row');
+    if (input) input.disabled = !enabled;
+    if (row) row.hidden = !enabled;
+}
 
 function niSyncDeviationResultUI({ collapsed = true, preserveBody = false } = {}) {
     const text = String(S.deviationGuide || '').trim();
@@ -1512,6 +1542,17 @@ function niTogglePanel(id, btnId) {
     b?.classList.toggle('active', p?.classList.toggle('on'));
 }
 window.niTogglePanel = niTogglePanel;
+
+function niToggleDevCfgPanel() {
+    const panel = q('#ni-dev-cfg-panel');
+    const btn = q('#ni-dev-cfg-btn');
+    if (!panel) return;
+    const open = panel.hidden || !panel.classList.contains('on');
+    panel.hidden = !open;
+    panel.style.display = open ? 'grid' : 'none';
+    panel.classList.toggle('on', open);
+    btn?.classList.toggle('active', open);
+}
 
 function niTogglePrompt() {
     const pb = q('#ni-pb');
@@ -4542,7 +4583,10 @@ function niRenderStageDrawer() {
         const disabledAttr = isEmpty ? ' disabled' : '';
         const emptyClass = isEmpty ? ' ni-drawer-item-empty' : '';
         return `<div class="ni-drawer-item${emptyClass}" data-drawer-stage="${idx}"${hiddenAttr}>
-          <input type="checkbox" id="ni-dchk-${idx}" data-drawer-stage="${idx}"${disabledAttr}${hasOn ? ' checked' : ''}>
+          <label class="ni-drawer-check-wrap" for="ni-dchk-${idx}" title="选择阶段">
+            <input type="checkbox" id="ni-dchk-${idx}" data-drawer-stage="${idx}"${disabledAttr}${hasOn ? ' checked' : ''}>
+            <span class="ni-drawer-check-box"><i class="ti ti-check"></i></span>
+          </label>
           <label for="ni-dchk-${idx}">第 ${idx} 阶段登场角色${cnt ? `（${cnt.total}人）` : '（无新角色）'}</label>
           <span class="ni-drawer-on-badge" id="ni-dbadge-${idx}"${hasOn ? '' : ' style="display:none"'}>${cnt ? cnt.on : 0} 已开</span>
         </div>`;
@@ -4890,7 +4934,10 @@ function niRenderUserSubUI() {
             const aliasKind = a.kind || 'custom';
             const stageLabel = niUserSubStageLabel(a.firstStage);
             return `<div class="ni-user-sub-row" data-row-idx="${i}" data-alias-key="${niEscAttr(aliasKey)}" data-alias-kind="${niEscAttr(aliasKind)}" data-first-stage="${niEscAttr(a.firstStage || '')}">
-              <input class="ni-user-sub-enabled" type="checkbox"${active ? ' checked' : ''} title="是否替换为 <user>">
+              <label class="ni-user-sub-check" title="是否替换为 <user>">
+                <input class="ni-user-sub-enabled" type="checkbox"${active ? ' checked' : ''}>
+                <span class="ni-user-sub-box"><i class="ti ti-check"></i></span>
+              </label>
               <input class="ni-cef-input ni-user-sub-name" value="${niEscAttr(a.text || '')}" placeholder="称呼">
               <span class="ni-user-sub-stage-tag">${niEscHtml(stageLabel)}</span>
               <button class="ni-user-sub-del" title="删除称呼"><i class="ti ti-x"></i></button>
@@ -6604,10 +6651,63 @@ function niDevButtonLabel() {
     return text ? '更新当前偏差' : '分析当前偏差';
 }
 
-function niSyncDevButtonLabel() {
+function niDevAutoEvery() {
+    const cfg = extension_settings[EXT_NAME] || {};
+    if (!(cfg.devAutoUpdateEnabled ?? DEFAULT_SETTINGS.devAutoUpdateEnabled)) return 0;
+    return niBoundIntValue(cfg.devAutoUpdateEvery, DEFAULT_SETTINGS.devAutoUpdateEvery, 1, 9999);
+}
+
+function niDevRecentMessageLimit(auto = false) {
+    const cfg = extension_settings[EXT_NAME] || {};
+    const fallback = auto ? Math.max(1, DEFAULT_SETTINGS.devManualMsgCount) : DEFAULT_SETTINGS.devManualMsgCount;
+    const raw = auto ? (cfg.devAutoUpdateEvery ?? fallback) : (cfg.devManualMsgCount ?? fallback);
+    return niBoundIntValue(raw, fallback, 1, 200);
+}
+
+function niGetRenderedChatMessages() {
+    const rows = [...document.querySelectorAll('#chat .mes[mesid]')];
+    return rows.map(row => {
+        const textEl = row.querySelector('.mes_text');
+        const text = (textEl?.innerText || textEl?.textContent || '').trim();
+        if (!text) return null;
+        return {
+            mes: text,
+            name: row.getAttribute('ch_name') || row.querySelector('.name_text')?.textContent?.trim() || '',
+            is_user: row.getAttribute('is_user') === 'true',
+            is_system: row.getAttribute('is_system') === 'true',
+            mes_id: Number(row.getAttribute('mesid')),
+        };
+    }).filter(Boolean);
+}
+
+function niGetCurrentChatMessages() {
+    const rendered = niGetRenderedChatMessages();
+    if (rendered.length) return rendered;
+    const ctx = getContext();
+    return Array.isArray(ctx?.chat) ? ctx.chat : [];
+}
+
+function niBuildRecentChatText(limit) {
+    return niGetCurrentChatMessages().slice(-limit)
+        .map(m => {
+            const role = m.is_system ? '[系统]' : (m.is_user ? '[用户]' : '[AI]');
+            return `${role} ${m.mes || ''}`;
+        })
+        .join('\n');
+}
+
+function niSetDevButtonState({ running = false } = {}) {
     const btn = q('#ni-btn-dev');
-    if (!btn || btn.disabled) return;
-    btn.innerHTML = `<i class="ti ti-analyze"></i>${niDevButtonLabel()}`;
+    if (!btn) return;
+    btn.disabled = !!running;
+    const icon = document.createElement('i');
+    icon.className = running ? 'ti ti-loader-2 ni-spin-icon' : 'ti ti-analyze';
+    btn.replaceChildren(icon, document.createTextNode(running ? '分析中…' : niDevButtonLabel()));
+}
+
+function niSyncDevButtonLabel() {
+    if (S.devRunning) return;
+    niSetDevButtonState({ running: false });
 }
 
 function niBuildDeviationPrompt(promptTemplate, reference, recentMsgs, existingDeviation) {
@@ -6627,86 +6727,85 @@ function niBuildDeviationPrompt(promptTemplate, reference, recentMsgs, existingD
     return prompt;
 }
 
-async function niRunDev() {
-    const btn = q('#ni-btn-dev');
-    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader"></i>分析中…'; }
+async function niRunDev(options = {}) {
+    const auto = !!options.auto;
+    if (S.devRunning) return { ok: false, skipped: true, reason: 'running' };
+
+    S.devRunning = true;
+    niSetDevButtonState({ running: true });
 
     const devPanel = q('#ni-dev-panel');
+    const noteEl = q('#ni-dev-note');
     if (devPanel) devPanel.style.display = 'block';
-    const existingDeviation = (q('#ni-dev-result')?.value || S.deviationGuide || '').trim();
-    S.deviationGuide = existingDeviation;
-
-    // 取当前对话最近 10 条消息
-    const ctx = getContext();
-    const recentMsgs = (ctx?.chat || []).slice(-10)
-        .map(m => `${m.is_user ? '[用户]' : '[AI]'} ${m.mes || ''}`)
-        .join('\n');
-
-    // 收集已开启阶段，区分已向量 / 未向量
-    const enabledStages = Object.entries(S.stageStates)
-        .filter(([, on]) => on)
-        .map(([k]) => Number(k));
-
-    if (!enabledStages.length) {
-        if (devPanel) q('#ni-dev-note').textContent = '没有已开启的阶段，请先在「阶段」页开启至少一个阶段。';
-        if (btn) { btn.disabled = false; niSyncDevButtonLabel(); }
-        return;
-    }
-
-    const _vecInjDisabled = !!(extension_settings[EXT_NAME]?.vecInjDisabled);
-    const vecStages = _vecInjDisabled ? [] : enabledStages.filter(si => S.stageVecDone[si]);
-    const rawStages = _vecInjDisabled
-        ? enabledStages.slice()
-        : enabledStages.filter(si => !S.stageVecDone[si]);
-
-    const refParts = [];
-
-    // ① 已向量阶段 → 向量召回
-    if (vecStages.length) {
-        try {
-            const vecRef = await recallRelevant(recentMsgs.slice(0, 500), vecStages);
-            if (vecRef.trim()) refParts.push(`[向量召回片段]\n${vecRef}\n[/向量召回片段]`);
-        } catch (e) { console.warn('[NI] 偏差分析向量召回失败:', e); }
-    }
-
-    // ② 未向量阶段 → 直接使用剧情节点文本
-    if (rawStages.length) {
-        const plotLines = [];
-        for (const si of rawStages) {
-            const nodes = getNodesForStage(si);
-            const allNodes = niMergeStageNodes(nodes);
-            if (allNodes.length) {
-                plotLines.push(`【第 ${si} 阶段剧情节点】`);
-                allNodes.forEach(p => {
-                    const loc = p.location ? `（${p.location}）` : '';
-                    plotLines.push(`· ${p.title}${loc}：${p.body || ''}`);
-                });
-            } else {
-                // 节点为空时，回退到阶段概括文本
-                const summary = S.stageSummaries[si];
-                if (summary && summary.trim()) {
-                    plotLines.push(`【第 ${si} 阶段概括】`);
-                    plotLines.push(summary.trim());
-                }
-            }
-        }
-        if (plotLines.length) refParts.push(`[阶段剧情文本]\n${plotLines.join('\n')}\n[/阶段剧情文本]`);
-    }
-
-    const reference = refParts.join('\n\n');
-
-    if (!reference.trim()) {
-        if (devPanel) q('#ni-dev-note').textContent = '未能获取参考内容（已向量阶段：无语义召回结果；未向量阶段：无剧情节点或概括文本）。';
-        if (btn) { btn.disabled = false; niSyncDevButtonLabel(); }
-        return;
-    }
-
-    const promptTemplate = q('#ni-dev-pt-content')?.value
-        || extension_settings[EXT_NAME]?.devPrompt
-        || DEV_PROMPT;
-    const prompt = niBuildDeviationPrompt(promptTemplate, reference, recentMsgs, existingDeviation);
 
     try {
+        const existingDeviation = (q('#ni-dev-result')?.value || S.deviationGuide || '').trim();
+        S.deviationGuide = existingDeviation;
+
+        const recentLimit = niDevRecentMessageLimit(auto);
+        const recentMsgs = niBuildRecentChatText(recentLimit);
+
+        // 收集已开启阶段，区分已向量 / 未向量
+        const enabledStages = Object.entries(S.stageStates)
+            .filter(([, on]) => on)
+            .map(([k]) => Number(k));
+
+        if (!enabledStages.length) {
+            if (noteEl) noteEl.textContent = '没有已开启的阶段，请先在「阶段」页开启至少一个阶段。';
+            return { ok: false, reason: 'no_enabled_stage' };
+        }
+
+        const _vecInjDisabled = !!(extension_settings[EXT_NAME]?.vecInjDisabled);
+        const vecStages = _vecInjDisabled ? [] : enabledStages.filter(si => S.stageVecDone[si]);
+        const rawStages = _vecInjDisabled
+            ? enabledStages.slice()
+            : enabledStages.filter(si => !S.stageVecDone[si]);
+
+        const refParts = [];
+
+        // ① 已向量阶段 → 向量召回
+        if (vecStages.length) {
+            try {
+                const vecRef = await recallRelevant(recentMsgs.slice(0, 500), vecStages);
+                if (vecRef.trim()) refParts.push(`[向量召回片段]\n${vecRef}\n[/向量召回片段]`);
+            } catch (e) { console.warn('[NI] 偏差分析向量召回失败:', e); }
+        }
+
+        // ② 未向量阶段 → 直接使用剧情节点文本
+        if (rawStages.length) {
+            const plotLines = [];
+            for (const si of rawStages) {
+                const nodes = getNodesForStage(si);
+                const allNodes = niMergeStageNodes(nodes);
+                if (allNodes.length) {
+                    plotLines.push(`【第 ${si} 阶段剧情节点】`);
+                    allNodes.forEach(p => {
+                        const loc = p.location ? `（${p.location}）` : '';
+                        plotLines.push(`· ${p.title}${loc}：${p.body || ''}`);
+                    });
+                } else {
+                    const summary = S.stageSummaries[si];
+                    if (summary && summary.trim()) {
+                        plotLines.push(`【第 ${si} 阶段概括】`);
+                        plotLines.push(summary.trim());
+                    }
+                }
+            }
+            if (plotLines.length) refParts.push(`[阶段剧情文本]\n${plotLines.join('\n')}\n[/阶段剧情文本]`);
+        }
+
+        const reference = refParts.join('\n\n');
+
+        if (!reference.trim()) {
+            if (noteEl) noteEl.textContent = '未能获取参考内容（已向量阶段：无语义召回结果；未向量阶段：无剧情节点或概括文本）。';
+            return { ok: false, reason: 'empty_reference' };
+        }
+
+        const promptTemplate = q('#ni-dev-pt-content')?.value
+            || extension_settings[EXT_NAME]?.devPrompt
+            || DEV_PROMPT;
+        const prompt = niBuildDeviationPrompt(promptTemplate, reference, recentMsgs, existingDeviation);
+
         const raw = await callCleanApi([{ role: 'user', content: prompt }]);
         const json = JSON.parse(raw.replace(/```json|```/g, '').trim());
 
@@ -6715,18 +6814,74 @@ async function niRunDev() {
             const val = Math.max(0, Math.min(100, json[f] || 0));
             animateBar(`ni-d${i}`, `ni-s${i}`, val);
         });
-        q('#ni-dev-note').textContent = json.summary || '';
+        if (noteEl) noteEl.textContent = json.summary || '';
         const nextGuide = niBuildDeviationGuideFromAnalysis(json);
         S.deviationGuide = nextGuide || existingDeviation;
         niSyncDeviationResultUI({ collapsed: true });
         await niQueueDeviationGuideSave({ immediate: true });
+        return { ok: true, auto, recentLimit };
     } catch (e) {
-        q('#ni-dev-note').textContent = `分析失败: ${e.message}`;
+        if (noteEl) noteEl.textContent = `分析失败: ${e.message}`;
+        return { ok: false, error: e };
+    } finally {
+        S.devRunning = false;
+        niSetDevButtonState({ running: false });
     }
-
-    if (btn) { btn.disabled = false; niSyncDevButtonLabel(); }
 }
 window.niRunDev = niRunDev;
+
+function niCurrentChatFloorCount() {
+    return niGetCurrentChatMessages().length;
+}
+
+function niResetDevAutoCounter() {
+    S.devAutoLastFloor = niCurrentChatFloorCount();
+}
+
+function niNotifyDevAutoComplete(recentLimit) {
+    const msg = `前文偏差已自动更新完成（本次读取最近 ${recentLimit} 层）。`;
+    alert(msg);
+}
+
+async function niMaybeAutoRunDev() {
+    if (extension_settings[EXT_NAME]?.pluginEnabled === false) return;
+    const every = niDevAutoEvery();
+    if (every <= 0) {
+        S.devAutoLastFloor = null;
+        return;
+    }
+
+    const floor = niCurrentChatFloorCount();
+    if (!floor) return;
+    if (S.devAutoLastFloor == null || S.devAutoLastFloor > floor) {
+        S.devAutoLastFloor = floor;
+        return;
+    }
+    if (floor - S.devAutoLastFloor < every) return;
+    if (S.devRunning) return;
+
+    const result = await niRunDev({ auto: true });
+    S.devAutoLastFloor = floor;
+    if (result?.ok) niNotifyDevAutoComplete(result.recentLimit || niDevRecentMessageLimit(true));
+}
+
+function niBindDeviationAutoUpdateEvents() {
+    if (typeof eventSource === 'undefined' || typeof event_types === 'undefined') return;
+    const renderEvent = event_types.CHARACTER_MESSAGE_RENDERED || event_types.MESSAGE_RENDERED;
+    if (renderEvent) {
+        eventSource.on(renderEvent, () => {
+            setTimeout(() => {
+                niMaybeAutoRunDev().catch(e => console.warn('[NI] 自动偏差分析失败:', e));
+            }, 350);
+        });
+    }
+    if (event_types.CHAT_CHANGED) {
+        eventSource.on(event_types.CHAT_CHANGED, () => {
+            S.devAutoLastFloor = null;
+            setTimeout(() => niResetDevAutoCounter(), 350);
+        });
+    }
+}
 
 function animateBar(barId, valId, target) {
     let c = 0;
@@ -8674,9 +8829,20 @@ jQuery(async () => {
     });
 
     // 偏差分析
-    $app.on('click', '#ni-btn-dev', () => niRunDev());
+    $app.on('click', '#ni-btn-dev', async () => {
+        const result = await niRunDev();
+        if (result?.ok) niResetDevAutoCounter();
+    });
+    $app.on('click', '#ni-dev-cfg-btn', () => {
+        niToggleDevCfgPanel();
+    });
     $app.on('click', '#ni-dev-prompt-btn', () => {
         niTogglePanel('ni-dev-pb', 'ni-dev-prompt-btn');
+    });
+    $app.on('input change', '#ni-dev-auto-enabled, #ni-dev-auto-every, #ni-dev-manual-msg-count', () => {
+        niSyncDevAutoUI();
+        niSaveSettings();
+        niResetDevAutoCounter();
     });
     $app.on('input', '#ni-dev-pt-content', () => niSaveSettings());
     $app.on('click', '#ni-dev-pt-reset', () => {
@@ -8860,11 +9026,19 @@ jQuery(async () => {
     $app.on('click', '#ni-char-del-confirm-btn', () => niConfirmCharDel());
 
     // 动态生成元素的事件委托（使用 data-* 属性，避免 inline onclick CSP 问题）
-    $app.on('click', '.ni-plot-head', function() {
+    $app.on('click', '.ni-plot-head', function(e) {
+        if (_plotEditMode || _plotDelMode) {
+            e.preventDefault();
+            return;
+        }
         niTogglePlot($(this).data('plot-id'));
     });
     // Timeline node toggle
-    $app.on('click', '.ni-tl-head', function() {
+    $app.on('click', '.ni-tl-head', function(e) {
+        if (_plotEditMode || _plotDelMode) {
+            e.preventDefault();
+            return;
+        }
         const id = $(this).data('tl-id');
         q(`#${id}`)?.classList.toggle('open');
     });
@@ -9015,10 +9189,11 @@ jQuery(async () => {
     // 阶段抽屉：点击 item 行触发（排除 checkbox 和 label，避免与 change 事件双重触发）
     $app.on('click', '.ni-drawer-item', function(e) {
         e.stopPropagation();
-        // checkbox 和 label 的点击均交由原生行为 + change 事件处理，不重复处理
-        if (e.target.type === 'checkbox' || e.target.tagName === 'LABEL') return;
+        // checkbox 和 label 内部点击均交由原生行为 + change 事件处理，不重复处理
+        if (e.target.type === 'checkbox' || e.target.closest('label')) return;
         const cb = this.querySelector('input[type=checkbox]');
         if (!cb) return;
+        if (cb.disabled) return;
         cb.checked = !cb.checked;
         // 手动触发 change 事件，统一走 change 分支
         $(cb).trigger('change');
@@ -9309,6 +9484,8 @@ jQuery(async () => {
 
     // 监听酒馆事件：发消息前注入上下文
     eventSource.on(event_types.CHAT_COMPLETION_PROMPT_READY, onPromptReady);
+    niBindDeviationAutoUpdateEvents();
+    niResetDevAutoCounter();
 
     console.log('[NI] 小说注入插件 加载完成');
 });
@@ -9438,7 +9615,7 @@ function niRenderStageSlots() {
         const nodeRows = allNodes.map(({ plot, ci, chunkIdx, isPivot }) => {
             if (assignedMap[ci] !== parseInt(sid)) return '';  // 未分配或属于其他阶段 → 不渲染
             return `<div class="ni-sp-node-row" data-slot-id="${sid}" data-chunk-idx="${ci}">
-              <div class="ni-sp-check on"><i class="ti ti-check" style="font-size:10px;color:#fff"></i></div>
+              <div class="ni-sp-check on"><i class="ti ti-check" style="font-size:10px;color:var(--ni-checkbox-on, #fff)"></i></div>
               <div class="ni-sp-node-info">
                 <span class="ni-sp-node-title">${niEscHtml(plot.title)}</span>
                 <span class="ni-sp-node-meta">第 ${chunkIdx+1} 段${plot.time ? ' · '+niEscHtml(plot.time) : ''}</span>
@@ -10205,6 +10382,34 @@ S.tbPaused     = false; // 暂停推进（内存态，不持久化）
 S.tbCurIdx     = 0;    // 当前轮播中心节点下标（在 niGetTbNodes() 返回数组中的下标）
 S.tbInferring  = false; // 推演中
 S.tbSectionOpen = { done: false, active: true, todo: false };
+
+function niTbSyncPauseUI() {
+    const paused = !!S.tbPaused;
+
+    const barBtn  = document.getElementById('ni-tb-btn-pause');
+    const barIcon = document.getElementById('ni-tb-pause-icon');
+    const barText = document.getElementById('ni-tb-pause-text');
+    barBtn?.classList.toggle('paused', paused);
+    if (barIcon) barIcon.className = paused ? 'ti ti-player-play' : 'ti ti-player-pause';
+    if (barText) barText.textContent = paused ? '继续' : '暂停';
+
+    const popBtn = document.getElementById('ni-pop-btn-pause');
+    const popTxt = document.getElementById('ni-pop-pause-txt');
+    popBtn?.classList.toggle('paused', paused);
+    if (popTxt) popTxt.textContent = paused ? '恢复' : '暂停';
+}
+window.niTbSyncPauseUI = niTbSyncPauseUI;
+
+function niTbSetPaused(paused) {
+    S.tbPaused = !!paused;
+    niTbSyncPauseUI();
+}
+window.niTbSetPaused = niTbSetPaused;
+
+function niTbTogglePaused() {
+    niTbSetPaused(!S.tbPaused);
+}
+window.niTbTogglePaused = niTbTogglePaused;
 
 // ── 数据字段追加到 DEFAULT_SETTINGS ─────────────────────────
 
@@ -11036,7 +11241,7 @@ ni_query{display:none!important}
 .ni-tb-sc-check{position:absolute;top:10px;right:10px;width:15px;height:15px;border-radius:50%;border:0.5px solid rgba(160,68,94,.3);background:var(--color-background-secondary,#f7f7f8);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .2s;z-index:3}
 .ni-tb-sc-check.checked{background:var(--ni-warning-soft, #fde8ea);border-color:var(--ni-warning-alpha-50, rgba(208,100,110,.5))}
 .ni-tb-sc-check i{font-size:9px;color:transparent;transition:color .2s}
-.ni-tb-sc-check.checked i{color:var(--ni-warning, #c05a62)}
+.ni-tb-sc-check.checked i{color:var(--ni-primary, #A0445E)!important;text-shadow:none!important}
 .ni-tb-stage-done-badge{display:flex;align-items:center;justify-content:center;gap:5px;padding:10px 16px;font-size:11px;color:var(--ni-warning, #c05a62);background:var(--ni-warning-soft-2, #fff5f6);border-top:0.5px solid var(--ni-warning-alpha-15, rgba(208,100,110,.15))}
 .ni-tb-infer-block{display:none;flex-direction:column;background:var(--color-background-primary,#fff);border-top:0.5px solid var(--color-border-tertiary,#e8e8ec)}
 .ni-tb-infer-block.vis{display:flex}
@@ -11107,6 +11312,7 @@ function niTbRenderStoryBar() {
     niTbBindEvents();
     niTbBuildTrack();
     niRefreshStorybarTheme();
+    niTbSyncPauseUI();
 }
 
 function niRefreshStorybarTheme(themeDraft = null) {
@@ -11165,13 +11371,7 @@ function niTbBindBarEvents() {
     // 暂停/恢复按钮
     on('ni-tb-btn-pause', 'click', (e) => {
         e.stopPropagation();
-        S.tbPaused = !S.tbPaused;
-        const btn  = document.getElementById('ni-tb-btn-pause');
-        const icon = document.getElementById('ni-tb-pause-icon');
-        const text = document.getElementById('ni-tb-pause-text');
-        btn?.classList.toggle('paused', S.tbPaused);
-        if (icon) icon.className = S.tbPaused ? 'ti ti-player-play' : 'ti ti-player-pause';
-        if (text) text.textContent = S.tbPaused ? '继续' : '暂停';
+        niTbTogglePaused();
     });
 
     // 推演折叠
@@ -11535,6 +11735,7 @@ jQuery(document).ready(function () {
             if (eventData?.dryRun) return;
             if (extension_settings[EXT_NAME]?.pluginEnabled === false) return;
             if (!extension_settings[EXT_NAME]?.transBookMode) return;
+            if (S.tbPaused) return;
 
             const cfg = extension_settings[EXT_NAME];
             let setExtensionPromptFn = null;
@@ -11607,6 +11808,7 @@ jQuery(document).ready(function () {
     eventSource.on(event_types.CHAT_CHANGED, () => {
         document.getElementById('ni-storybar')?.remove();
         S.tbPaused  = false;
+        niTbSyncPauseUI();
         _tbPendingAdvancePrompt = '';
         _tbAdvanceSent.clear();
         S.tbSectionOpen = { done: false, active: true, todo: false };
@@ -11671,7 +11873,6 @@ console.log('[NI-TB] 穿书模式模块已加载');
 
     // ── 状态 ──
     let _popOpen = false;
-    let _popPaused = false;
     let _popInferring = false;
     let _popInferExp = true;
     let _popStageOpen = false;
@@ -11983,6 +12184,7 @@ console.log('[NI-TB] 穿书模式模块已加载');
             wrap.style.pointerEvents = 'auto';
         }
         niPopRender();
+        if (typeof window.niTbSyncPauseUI === 'function') window.niTbSyncPauseUI();
     }
     function niPopClose() {
         _popOpen = false;
@@ -12097,14 +12299,18 @@ console.log('[NI-TB] 穿书模式模块已加载');
         });
 
         q('ni-pop-btn-pause')?.addEventListener('click', () => {
-            _popPaused = !_popPaused;
-            q('ni-pop-btn-pause')?.classList.toggle('paused', _popPaused);
-            const txt = q('ni-pop-pause-txt');
-            if (txt) txt.textContent = _popPaused ? '恢复' : '暂停';
-            // 同步到主插件
-            const S = (typeof extension_settings !== 'undefined' && typeof EXT_NAME !== 'undefined')
-                ? extension_settings[EXT_NAME] : null;
-            if (S) { S.tbPaused = _popPaused; if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced(); }
+            if (typeof window.niTbTogglePaused === 'function') {
+                window.niTbTogglePaused();
+                return;
+            }
+            const runtime = (typeof window._niS !== 'undefined') ? window._niS : null;
+            if (runtime) {
+                runtime.tbPaused = !runtime.tbPaused;
+                const paused = !!runtime.tbPaused;
+                q('ni-pop-btn-pause')?.classList.toggle('paused', paused);
+                const txt = q('ni-pop-pause-txt');
+                if (txt) txt.textContent = paused ? '恢复' : '暂停';
+            }
         });
 
         q('ni-pop-btn-infer')?.addEventListener('click', () => {

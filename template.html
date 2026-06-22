@@ -517,9 +517,32 @@
       <div class="ni-card">
         <div class="ni-ctitle">
           <span class="ni-ctitle-label"><i class="ti ti-ruler-measure"></i>前文偏差分析</span>
+          <button class="ni-icon-btn" id="ni-dev-cfg-btn" title="偏差分析设置"><i class="ti ti-settings"></i></button>
           <button class="ni-icon-btn" id="ni-dev-prompt-btn" title="编辑提示词"><i class="ti ti-code"></i></button>
         </div>
         <p class="ni-desc">对比当前对话与当前激活阶段的原著参考内容，分析主线、人物行为、地点、支线的偏差。</p>
+        <div id="ni-dev-cfg-panel" hidden>
+          <div class="ni-dev-auto-line">
+            <label class="ni-dev-setting-label" for="ni-dev-auto-enabled">
+              <i class="ti ti-refresh"></i>
+              <span>自动更新</span>
+            </label>
+            <label class="ni-dev-auto-row ni-dev-auto-inline" for="ni-dev-auto-every">
+              <span>间隔</span>
+              <input type="text" id="ni-dev-auto-every" class="ni-kb-inp" value="10" inputmode="numeric" pattern="[0-9]*">
+              <em>层</em>
+            </label>
+            <label class="ni-toggle-wrap ni-dev-auto-check" for="ni-dev-auto-enabled">
+              <input type="checkbox" id="ni-dev-auto-enabled">
+              <span class="ni-cfg-chk"><i class="ti ti-check"></i></span>
+            </label>
+          </div>
+          <label class="ni-dev-cfg-row" for="ni-dev-manual-msg-count">
+            <span class="ni-dev-setting-label"><i class="ti ti-list-details"></i><span>手动更新读取</span></span>
+            <input type="text" id="ni-dev-manual-msg-count" class="ni-kb-inp" value="10" inputmode="numeric" pattern="[0-9]*">
+            <em>层</em>
+          </label>
+        </div>
         <div class="ni-prompt-box" id="ni-dev-pb">
           <div class="ni-pt-wrap">
             <textarea id="ni-dev-pt-content" class="ni-pt-textarea" rows="7" spellcheck="false"></textarea>
@@ -565,22 +588,6 @@
         <!-- 设置面板 -->
         <div class="ni-api-panel" id="ni-tb-cfg-panel">
           <div class="ni-field" style="margin-bottom:0">
-            <div style="display:flex;align-items:center;justify-content:space-between">
-              <label style="display:flex;align-items:center;gap:5px">
-                <i class="ti ti-filter" style="font-size:12px"></i>轻量化召回
-                <span style="font-size:10px;color:var(--color-text-secondary);font-weight:400">按当前节点裁切未来内容</span>
-              </label>
-              <label class="ni-toggle-wrap">
-                <input type="checkbox" id="ni-tb-light-recall-mode">
-                <span class="ni-cfg-chk"><i class="ti ti-check"></i></span>
-              </label>
-            </div>
-            <div style="font-size:11px;color:var(--color-text-secondary);margin-top:6px;line-height:1.6">
-              ① 开启后，向量召回会以当前快穿节点的时间、标题和所在段落为锚点，优先保留节点附近的压缩原文。<br>
-              ② 明显晚于当前节点的后续段落会被裁掉，减少剧透和剧情抢跑；不会重新向量化，也不会修改原文数据。
-            </div>
-          </div>
-          <div class="ni-field" style="margin-top:10px;margin-bottom:0">
             <label style="margin-bottom:8px"><i class="ti ti-layout-list" style="font-size:12px;margin-right:4px;vertical-align:-1px"></i>剧情进度显示方式</label>
             <div style="display:flex;align-items:center;gap:16px">
               <label class="ni-toggle-label">
@@ -593,6 +600,23 @@
                 <span class="ni-cfg-chk"><i class="ti ti-check"></i></span>
                 <span>弹窗</span>
               </label>
+            </div>
+          </div>
+          <div class="ni-field" style="margin-top:10px;margin-bottom:0">
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <label style="display:flex;align-items:center;gap:5px">
+                <i class="ti ti-eye" style="font-size:12px"></i>沉浸
+                <span style="font-size:10px;color:var(--color-text-secondary);font-weight:400">仅写 &lt;user&gt; 已知信息</span>
+              </label>
+              <label class="ni-toggle-wrap">
+                <input type="checkbox" id="ni-tb-immersion-mode">
+                <span class="ni-cfg-chk"><i class="ti ti-check"></i></span>
+              </label>
+            </div>
+            <div style="font-size:11px;color:var(--color-text-secondary);margin-top:6px;line-height:1.6">
+              ① 开启后为穿书开场、推进、持续和推演追加沉浸边界。<br>
+              ② AI 仍可用后台资料维持因果，但正文只写 &lt;user&gt; 已感知、被告知或可合理推断的内容。<br>
+              ③ 未揭示的姓名、身份、关系和秘密会通过剧情内线索自然出现，避免 &lt;user&gt; 天然全知。
             </div>
           </div>
           <div class="ni-field" style="margin-top:10px;margin-bottom:0">
@@ -616,18 +640,17 @@
           <div class="ni-field" style="margin-top:10px;margin-bottom:0">
             <div style="display:flex;align-items:center;justify-content:space-between">
               <label style="display:flex;align-items:center;gap:5px">
-                <i class="ti ti-eye" style="font-size:12px"></i>沉浸
-                <span style="font-size:10px;color:var(--color-text-secondary);font-weight:400">仅写 &lt;user&gt; 已知信息</span>
+                <i class="ti ti-filter" style="font-size:12px"></i>轻量化召回
+                <span style="font-size:10px;color:var(--color-text-secondary);font-weight:400">按当前节点裁切未来内容</span>
               </label>
               <label class="ni-toggle-wrap">
-                <input type="checkbox" id="ni-tb-immersion-mode">
+                <input type="checkbox" id="ni-tb-light-recall-mode">
                 <span class="ni-cfg-chk"><i class="ti ti-check"></i></span>
               </label>
             </div>
             <div style="font-size:11px;color:var(--color-text-secondary);margin-top:6px;line-height:1.6">
-              ① 开启后为穿书开场、推进、持续和推演追加沉浸边界。<br>
-              ② AI 仍可用后台资料维持因果，但正文只写 &lt;user&gt; 已感知、被告知或可合理推断的内容。<br>
-              ③ 未揭示的姓名、身份、关系和秘密会通过剧情内线索自然出现，避免 &lt;user&gt; 天然全知。
+              ① 开启后，向量召回会以当前快穿节点的时间、标题和所在段落为锚点，优先保留节点附近的压缩原文。<br>
+              ② 明显晚于当前节点的后续段落会被裁掉，减少剧透和剧情抢跑；不会重新向量化，也不会修改原文数据。
             </div>
           </div>
         </div>
@@ -1305,7 +1328,7 @@
 .ni-nr-status{width:32px;text-align:right;flex-shrink:0;padding-top:1px}
 .ni-nr-chk{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;border:1.5px solid rgba(160,68,94,.3);background:#fff;font-size:8px;color:transparent;cursor:pointer;transition:all .18s;pointer-events:none}
 .ni-node-row.is-active .ni-nr-chk{pointer-events:auto}
-.ni-nr-chk.checked{background:linear-gradient(135deg,#fde8f0,#f5c6d8);border-color:#c05a72;color:#c05a72}
+.ni-nr-chk.checked{background:linear-gradient(135deg,#fde8f0,#f5c6d8);border-color:#c05a72;color:#c05a72!important;text-shadow:none!important}
 .ni-node-desc{display:none;padding:4px 10px 6px;font-size:9px;color:#a06878;line-height:1.6;background:linear-gradient(to right,#fff5f8,#f8f0ff)}
 .ni-node-desc.vis{display:block}
 .ni-nd-body{color:#8a6070;font-size:9px;line-height:1.6;padding:1px 0 4px;border-bottom:1px dashed rgba(240,168,190,.4);margin-bottom:4px}

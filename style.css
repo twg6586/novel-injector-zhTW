@@ -17,6 +17,8 @@
   --ni-plot-node-bg: var(--color-background-primary);
   --ni-plot-node-head-bg: var(--color-background-secondary);
   --ni-plot-node-body-bg: var(--color-background-primary);
+  --ni-checkbox-on: #fff;
+  --ni-checkbox-check-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 8.2l2.5 2.5L12 5.3'/%3E%3C/svg%3E");
 }
 .ni-app.ni-surface-tavern {
   --ni-surface-bg: transparent;
@@ -192,7 +194,7 @@
   grid-template-columns: 42px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
-  margin-top: 8px;
+  margin-top: 1px;
   font-size: 12px;
   color: var(--color-text-secondary);
 }
@@ -243,7 +245,20 @@
 #ni-theme-borderless-row,
 #ni-theme-cardless-row,
 #ni-theme-statusbar-follow-row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 3px;
+  width: auto;
   padding: 2px 0;
+  margin: 0 2px 4px 0;
+  vertical-align: middle;
+}
+#ni-theme-surface-switch-row .ni-switch-wrap,
+#ni-theme-borderless-row .ni-switch-wrap,
+#ni-theme-cardless-row .ni-switch-wrap,
+#ni-theme-statusbar-follow-row .ni-switch-wrap {
+  gap: 0;
 }
 #ni-theme-surface-switch-row .ni-switch-label,
 #ni-theme-borderless-row .ni-switch-label,
@@ -437,6 +452,7 @@
 #ni-prompt-btn,
 #ni-style-cfg-btn,
 #ni-style-prompt-btn,
+#ni-dev-cfg-btn,
 #ni-dev-prompt-btn,
 #ni-vec-cfg-btn,
 #ni-vec-stage-btn,
@@ -454,11 +470,11 @@
   border-radius: 4px;
   background: var(--color-background-primary);
 }
-#ni-dev-prompt-btn { margin-left: auto; }
 #ni-clean-cfg-btn:hover,
 #ni-prompt-btn:hover,
 #ni-style-cfg-btn:hover,
 #ni-style-prompt-btn:hover,
+#ni-dev-cfg-btn:hover,
 #ni-dev-prompt-btn:hover,
 #ni-vec-cfg-btn:hover,
 #ni-vec-stage-btn:hover,
@@ -469,6 +485,7 @@
 #ni-user-sub-cfg-btn:hover {
   background: var(--color-background-secondary);
 }
+#ni-dev-cfg-btn { margin-left: auto; }
 
 /* ---- Tool Row ---- */
 .ni-tool-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
@@ -559,7 +576,7 @@
   border-color: var(--ni-primary, #A0445E);
 }
 #ni-global-pb input[type="checkbox"]:checked + .ni-cfg-chk i {
-  color: var(--ni-primary-soft, #F5E6EC);
+  color: var(--ni-checkbox-on, #fff);
 }
 .ni-global-prompt-headrow {
   position: relative;
@@ -652,7 +669,7 @@
   border-color: var(--ni-primary, #A0445E);
 }
 #ni-tb-cfg-panel input[type="checkbox"]:checked + .ni-cfg-chk i {
-  color: var(--ni-primary-soft, #F5E6EC);
+  color: var(--ni-checkbox-on, #fff);
 }
 #ni-tb-cfg-panel .ni-toggle-wrap {
   display: inline-flex;
@@ -972,7 +989,7 @@
 .ni-stg-chk { width: 15px; height: 15px; border-radius: 4px; border: .5px solid var(--ni-primary-alpha-30, rgba(160, 68, 94, .3)); background: var(--color-background-primary); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all .15s; flex-shrink: 0; margin-top: 1px; }
 .ni-stg-chk.on { background: var(--ni-primary, #A0445E); border-color: var(--ni-primary, #A0445E); }
 .ni-stg-chk i { font-size: 10px; color: transparent; transition: color .15s; }
-.ni-stg-chk.on i { color: var(--ni-primary-on, #F5E6EC); }
+.ni-stg-chk.on i { color: var(--ni-checkbox-on, #fff); }
 .ni-stage-meta { flex: 1; min-width: 0; }
 .ni-stage-title-row { display: flex; align-items: center; gap: 7px; margin-bottom: 0; flex-wrap: wrap; }
 .ni-stage-num { font-size: 12px; font-weight: 500; color: var(--ni-primary, #A0445E); background: var(--ni-primary-soft, #F5E6EC); padding: 1px 7px; border-radius: 8px; flex-shrink: 0; }
@@ -1295,6 +1312,7 @@
   background: var(--ni-primary, #A0445E);
   border-color: var(--ni-primary, #A0445E);
 }
+.ni-sp-check.on i { color: var(--ni-checkbox-on, #fff) !important; }
 
 .ni-sp-node-info { flex: 1; min-width: 0; }
 .ni-sp-node-title {
@@ -1525,10 +1543,10 @@
 .ni-vec-stage-label input[type="checkbox"]:checked + .ni-vec-stage-box {
   background: var(--ni-primary, #A0445E);
   border-color: var(--ni-primary, #A0445E);
-  box-shadow: 0 0 0 2px var(--ni-primary-alpha-12, rgba(160, 68, 94, .12));
+  box-shadow: none;
 }
 .ni-vec-stage-label input[type="checkbox"]:checked + .ni-vec-stage-box i {
-  color: var(--ni-primary-on, #F5E6EC);
+  color: var(--ni-checkbox-on, #fff);
 }
 .ni-vec-done-badge {
   font-size: 10px;
@@ -1790,11 +1808,48 @@ select.ni-modal-input {
   line-height: 1;
   white-space: nowrap;
 }
-.ni-user-sub-row input[type="checkbox"] {
+.ni-user-sub-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.ni-user-sub-check input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+  pointer-events: none;
+}
+.ni-user-sub-box {
   width: 15px;
   height: 15px;
-  accent-color: var(--ni-primary, #A0445E);
-  cursor: pointer;
+  border: .5px solid var(--ni-primary-alpha-30, rgba(160, 68, 94, .3));
+  border-radius: 4px;
+  background: var(--color-background-primary);
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .15s, border-color .15s, outline-color .15s;
+}
+.ni-user-sub-box i {
+  font-size: 10px;
+  color: transparent;
+  transition: color .15s;
+}
+.ni-user-sub-check input[type="checkbox"]:checked + .ni-user-sub-box {
+  background: var(--ni-primary, #A0445E);
+  border-color: var(--ni-primary, #A0445E);
+}
+.ni-user-sub-check input[type="checkbox"]:checked + .ni-user-sub-box i {
+  color: var(--ni-checkbox-on, #fff);
+}
+.ni-user-sub-check input[type="checkbox"]:focus-visible + .ni-user-sub-box {
+  outline: 2px solid var(--ni-primary-alpha-30, rgba(160, 68, 94, .3));
+  outline-offset: 1px;
 }
 .ni-user-sub-del {
   width: 24px;
@@ -1892,12 +1947,55 @@ select.ni-modal-input {
   padding: 5px 11px; cursor: pointer; transition: background .1s;
 }
 .ni-drawer-item:hover { background: var(--color-background-secondary); }
-.ni-drawer-item input[type=checkbox] { width: 15px; height: 15px; flex-shrink: 0; cursor: pointer; accent-color: var(--ni-primary, var(--color-primary,#A0445E)); outline: 1px solid var(--ni-primary-alpha-30, rgba(160, 68, 94, .3)); outline-offset: -1px; }
-.ni-drawer-item input[type=checkbox]:checked { outline: none; }
-.ni-drawer-item label { font-size: 12px; color: var(--SmartThemeBodyColor, var(--color-text-primary)); cursor: pointer; flex: 1; }
+.ni-drawer-check-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.ni-drawer-check-wrap input[type=checkbox] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+  pointer-events: none;
+}
+.ni-drawer-check-box {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  border: .5px solid var(--ni-primary-alpha-30, rgba(160, 68, 94, .3));
+  border-radius: 4px;
+  background: var(--color-background-primary);
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .15s, border-color .15s, outline-color .15s;
+}
+.ni-drawer-check-box i {
+  font-size: 10px;
+  color: transparent;
+  transition: color .15s;
+}
+.ni-drawer-check-wrap input[type=checkbox]:checked + .ni-drawer-check-box {
+  background: var(--ni-primary, #A0445E);
+  border-color: var(--ni-primary, #A0445E);
+  outline: none;
+}
+.ni-drawer-check-wrap input[type=checkbox]:checked + .ni-drawer-check-box i {
+  color: var(--ni-checkbox-on, #fff);
+}
+.ni-drawer-check-wrap input[type=checkbox]:focus-visible + .ni-drawer-check-box {
+  outline: 2px solid var(--ni-primary-alpha-30, rgba(160, 68, 94, .3));
+  outline-offset: 1px;
+}
+.ni-drawer-item > label:not(.ni-drawer-check-wrap) { font-size: 12px; color: var(--SmartThemeBodyColor, var(--color-text-primary)); cursor: pointer; flex: 1; }
 .ni-drawer-item-empty { opacity: 0.45; }
-.ni-drawer-item-empty input[type=checkbox] { cursor: not-allowed; }
-.ni-drawer-item-empty label { cursor: default; color: var(--color-text-tertiary); }
+.ni-drawer-item-empty .ni-drawer-check-wrap { cursor: not-allowed; }
+.ni-drawer-item-empty > label:not(.ni-drawer-check-wrap) { cursor: default; color: var(--color-text-tertiary); }
 .ni-drawer-on-badge {
   font-size: 10px; padding: 1px 5px; border-radius: 9px; flex-shrink: 0;
   background: var(--color-background-success,#EAF3DE); color: var(--color-text-success,#3B6D11);
@@ -1956,7 +2054,7 @@ select.ni-modal-input {
 }
 .ni-char-chk-icon { font-size: 10px; color: transparent; line-height: 1; }
 .ni-char-chk.ni-char-chk-on { background: var(--ni-primary, #A0445E); border-color: var(--ni-primary, #A0445E); }
-.ni-char-chk.ni-char-chk-on .ni-char-chk-icon { color: #fff; }
+.ni-char-chk.ni-char-chk-on .ni-char-chk-icon { color: var(--ni-checkbox-on, #fff); }
 
 /* 中列：内容 */
 .ni-char-card-mid { flex: 1; min-width: 0; }
@@ -2049,6 +2147,10 @@ select.ni-modal-input {
   to   { transform: rotate(360deg); }
 }
 .ti-loader {
+  display: inline-block;
+  animation: ni-spin 0.8s linear infinite;
+}
+.ni-spin-icon {
   display: inline-block;
   animation: ni-spin 0.8s linear infinite;
 }
@@ -2305,6 +2407,7 @@ select.ni-modal-input {
 }
 .ni-stage-inline-textarea:focus {
   border-color: var(--ni-primary, #A0445E);
+}
 .ni-stage-inline-actions { display: flex; gap: 5px; }
 .ni-stage-expand-btn-group { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; align-self: flex-start; }
 .ni-stage-save-btn { font-size: 11px; color: var(--ni-primary, #A0445E); cursor: pointer; background: transparent; border: none; border-radius: 6px; outline: none; padding: 3px 8px; white-space: nowrap; display: flex; align-items: center; gap: 3px; transition: color .12s; }
@@ -2323,8 +2426,14 @@ select.ni-modal-input {
   display: flex; align-items: center; justify-content: space-between;
   padding: 4px 0; gap: 10px; cursor: pointer; user-select: none;
 }
-.ni-app .ni-switch-label { font-size: 13px; color: var(--color-text-primary); }
-.ni-app .ni-switch-wrap { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.ni-app .ni-switch-label {
+  font-size: 13px;
+  color: var(--color-text-primary);
+  display: inline-flex;
+  align-items: center;
+  line-height: 14px;
+}
+.ni-app .ni-switch-wrap { display: flex; align-items: center; gap: 8px; flex-shrink: 0; line-height: 14px; }
 
 .ni-app .ni-switch-track {
   display: none;
@@ -2348,7 +2457,13 @@ select.ni-modal-input {
   font-size: 12px !important;
   color: var(--ni-primary, #A0445E) !important;
   font-weight: 700 !important;
-  line-height: 1.2;
+  display: inline-flex !important;
+  align-items: center;
+  line-height: 14px !important;
+  transform: none !important;
+}
+#ni-app #ni-stream-btn {
+  line-height: 14px !important;
 }
 #ni-app #ni-stream-pill {
   padding: 0 !important;
@@ -2496,6 +2611,127 @@ select.ni-modal-input {
     border-radius: 4px;
 }
 #ni-style-cfg-panel.on { display: block; }
+
+#ni-dev-cfg-panel {
+    display: none;
+    margin-top: 8px;
+    padding: 10px;
+    background: var(--color-background-secondary);
+    border: .5px solid var(--color-border-tertiary);
+    border-radius: 4px;
+}
+#ni-dev-cfg-panel[hidden] { display: none !important; }
+#ni-dev-cfg-panel.on { display: grid; gap: 8px; }
+#ni-dev-cfg-panel .ni-toggle-label input[type="checkbox"],
+#ni-dev-cfg-panel .ni-toggle-wrap input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    margin: 0;
+    pointer-events: none;
+}
+#ni-dev-cfg-panel .ni-cfg-chk {
+    width: 15px;
+    height: 15px;
+    border-radius: 4px;
+    border: .5px solid var(--ni-primary-alpha-30, rgba(160, 68, 94, .3));
+    background: var(--color-background-primary);
+    flex-shrink: 0;
+    box-sizing: border-box;
+    transition: all .15s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+#ni-dev-cfg-panel .ni-cfg-chk i {
+    font-size: 10px;
+    color: transparent;
+    transition: color .15s;
+}
+#ni-dev-cfg-panel input[type="checkbox"]:checked + .ni-cfg-chk {
+    background: var(--ni-primary, #A0445E);
+    border-color: var(--ni-primary, #A0445E);
+}
+#ni-dev-cfg-panel input[type="checkbox"]:checked + .ni-cfg-chk i {
+    color: var(--ni-checkbox-on, #fff);
+}
+#ni-dev-cfg-panel .ni-dev-auto-check {
+    display: inline-flex;
+    align-items: center;
+    width: auto;
+    margin: 0 0 0 auto;
+    flex: 0 0 auto;
+    cursor: pointer;
+}
+.ni-dev-auto-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: nowrap;
+    min-width: 0;
+    width: 100%;
+    justify-self: stretch;
+}
+.ni-dev-setting-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
+.ni-dev-setting-label i {
+    font-size: 13px;
+    color: var(--color-text-tertiary);
+    flex-shrink: 0;
+}
+.ni-dev-auto-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
+.ni-dev-auto-inline span {
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+}
+.ni-dev-auto-inline em {
+    font-style: normal;
+    color: var(--color-text-tertiary);
+    white-space: nowrap;
+}
+.ni-dev-auto-inline .ni-kb-inp {
+    width: 54px;
+    text-align: center;
+}
+.ni-dev-cfg-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: fit-content;
+    justify-self: start;
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+}
+.ni-dev-cfg-row em {
+    font-style: normal;
+    color: var(--color-text-tertiary);
+    white-space: nowrap;
+}
+.ni-dev-cfg-row .ni-kb-inp {
+    width: 54px;
+    text-align: center;
+}
+.ni-dev-auto-row[hidden] { display: none !important; }
 
 #ni-style-pb,
 #ni-dev-pb {
