@@ -403,8 +403,8 @@ const DEV_PROMPT = `你是小说剧情偏差分析与分支现实整理师。
 
 你的任务不是强行把当前剧情拉回原著，而是维护一份可注入给后续写作模型的“新现实约束”。
 如果已有偏差档案为空，本次是首次分析：判断当前正文是否已经形成会改变后续走向的关键偏差。
-如果已有偏差档案非空，本次是更新偏差档案：必须保留仍然有效的旧偏差，合并当前正文中新成立的偏差，并补充旧偏差造成的新连锁影响。
-最终输出必须是一份更新后的完整偏差档案，不是只输出本次新增内容。
+如果已有偏差档案非空，本次是更新偏差档案：旧偏差只作为上下文，不能重写、压缩、删除或替换它；请只分析当前正文范围中新成立、被修正或产生连锁影响的偏差增补。
+最终输出必须是本次范围的偏差增补 JSON，不要输出整份旧偏差档案；插件会把本次结果追加到文本框现有内容中。
 
 请严格按 JSON 输出，不要输出 Markdown、代码块或结构外文字：
 {
@@ -448,9 +448,9 @@ const DEV_PROMPT = `你是小说剧情偏差分析与分支现实整理师。
     - 后续剧情要基于新事实自然推演连锁反应，而不是强行复刻原著事件。
 11. 已有偏差档案中的事实，除非当前正文明确推翻、改写或自然修正，否则不得删除、遗忘或降级。
 12. 死亡、身份暴露、关系断裂、阵营改变、地点转移、能力变化、已完成的关键行动等硬事实，即使最近正文没有再次提到，也必须默认保留。
-13. 若旧偏差仍有效，应继续写入 major_deviations、changed_facts 或 deviation_injection_prompt；不要只写“同上”。
-14. 若当前正文新增了会改变后续走向的事实，应追加到更新后的偏差档案中。
-15. 若旧偏差被当前正文明确修正，应在 summary 中简要说明，并在最终约束中移除或弱化它。
+13. 若旧偏差仍有效，不要重复搬运进本次增补；只有当前范围让它产生新影响或被修正时，才写入 major_deviations、changed_facts 或 deviation_injection_prompt。
+14. 若当前正文新增了会改变后续走向的事实，应写入本次增补中。
+15. 若旧偏差被当前正文明确修正，应在 summary 与 deviation_injection_prompt 中简要说明修正后的约束。
 
 输出前暗中自检，不输出自检过程：
 - 是否是合法 JSON。
@@ -729,6 +729,8 @@ const S = {
     deviationGuide: '',     // 当前偏差注入文本
     devRunning: false,
     devAutoLastFloor: null,
+    devCoveredFloor: 0,     // 当前偏差已顺序总结到第几楼
+    devLastRange: null,     // 最近一次偏差分析范围，供重试复用
 
     // 注入
 };
@@ -923,6 +925,8 @@ function niLoadSettings() {
     if (saved._worldCategories) {
         S.worldCategories = saved._worldCategories;
     }
+    if (saved._devCoveredFloor != null) S.devCoveredFloor = Math.max(0, parseInt(saved._devCoveredFloor, 10) || 0);
+    if (saved._devLastRange) S.devLastRange = saved._devLastRange;
 
     // 同步插件开关 UI
     niSyncPluginToggleUI();
@@ -1056,6 +1060,8 @@ function niApplyHeavyCore(payload) {
     if (payload._styleGuide != null) S.styleGuide = payload._styleGuide;
     if (payload._deviationGuide != null) {
         S.deviationGuide = payload._deviationGuide;
+        if (payload._devCoveredFloor != null) S.devCoveredFloor = Math.max(0, parseInt(payload._devCoveredFloor, 10) || 0);
+        if (payload._devLastRange) S.devLastRange = payload._devLastRange;
         niSyncDeviationGuideToCurrentSnapshot();
     }
     if (payload.heavyFileKey) S.heavyFileKey = payload.heavyFileKey;
@@ -1088,6 +1094,8 @@ async function niServerSaveHeavy(novelKey, fileKey = '') {
         _chunkStatus: S.chunkStatus,
         _styleGuide:  S.styleGuide,
         _deviationGuide: S.deviationGuide,
+        _devCoveredFloor: S.devCoveredFloor || 0,
+        _devLastRange: S.devLastRange || null,
     };
     const chunksPayload = {
         version: 2,
@@ -1110,7 +1118,11 @@ function niSyncDeviationGuideToCurrentSnapshot() {
     const key = S.novelKey || cfg?._novelKey || '';
     if (!key || !Array.isArray(cfg?.novelLibrary)) return;
     const snap = cfg.novelLibrary.find(s => s?.data?._novelKey === key);
-    if (snap?.data) snap.data._deviationGuide = S.deviationGuide || '';
+    if (snap?.data) {
+        snap.data._deviationGuide = S.deviationGuide || '';
+        snap.data._devCoveredFloor = S.devCoveredFloor || 0;
+        snap.data._devLastRange = S.devLastRange || null;
+    }
 }
 
 async function niSaveDeviationGuideNow() {
@@ -1340,6 +1352,8 @@ function niSaveSettings() {
         });
     }
     cfg._worldCategories = niGetWorldCategories();
+    cfg._devCoveredFloor = S.devCoveredFloor || 0;
+    cfg._devLastRange = S.devLastRange || null;
     cfg.worldInjPos   = parseInt(q('#ni-world-inj-pos')?.value)   ?? DEFAULT_SETTINGS.worldInjPos;
     cfg.worldInjDepth = parseInt(q('#ni-world-inj-depth')?.value)  ?? DEFAULT_SETTINGS.worldInjDepth;
     cfg.worldInjRole  = parseInt(q('#ni-world-inj-role')?.value)   ?? DEFAULT_SETTINGS.worldInjRole;
@@ -1488,7 +1502,9 @@ function niSyncDeviationResultUI({ collapsed = true, preserveBody = false } = {}
     const body = q('#ni-dev-result-body');
     const icon = q('#ni-dev-result-toggle i:last-child');
     const resEl = q('#ni-dev-result');
+    const badge = q('#ni-dev-floor-badge');
     if (resEl && resEl.value !== (S.deviationGuide || '')) resEl.value = S.deviationGuide || '';
+    if (badge) badge.textContent = `已总结 ${Math.max(0, parseInt(S.devCoveredFloor, 10) || 0)} 楼`;
     if (wrap) wrap.style.display = text ? 'block' : 'none';
     niSyncDevButtonLabel();
     if (!body) return;
@@ -4635,7 +4651,27 @@ window.niUpdateStageDrawerNote = niUpdateStageDrawerNote;
 function getCharFirstStage(c) {
     if (c._firstChunkIdx == null) return null;
     if (S.stageMapN <= 0) return null;
-    return S.stageMap[c._firstChunkIdx] ?? S.stageMap[String(c._firstChunkIdx)] ?? null;
+    return niGetFirstStageForChunkIdx(c._firstChunkIdx);
+}
+
+function niStageListFromValue(value) {
+    if (value == null) return [];
+    if (value instanceof Set) return [...value];
+    if (Array.isArray(value)) return value;
+    return [value];
+}
+
+function niGetFirstStageForChunkIdx(chunkIdx) {
+    if (chunkIdx == null || S.stageMapN <= 0) return null;
+    const ci = Number(chunkIdx);
+    if (!Number.isFinite(ci)) return null;
+    const chunkStages = S.chunkStageMap?.[ci] ?? S.chunkStageMap?.[String(ci)];
+    const stages = niStageListFromValue(chunkStages)
+        .map(v => parseInt(v, 10))
+        .filter(v => Number.isFinite(v) && v > 0)
+        .sort((a, b) => a - b);
+    if (stages.length) return stages[0];
+    return S.stageMap[ci] ?? S.stageMap[String(ci)] ?? null;
 }
 
 function niCharAutoSleepEnabled() {
@@ -4672,17 +4708,44 @@ function niIsUserSubProtectedChar(c, idx) {
     return !!selectedName && _isSameChar(c, { name: selectedName });
 }
 
+function niCanUseAliasTextForPresence(alias) {
+    const text = String(alias?.text || alias?.name || alias?.alias || alias?.title || '').trim();
+    const kind = String(alias?.kind || alias?.type || '').trim().toLowerCase();
+    if (!text) return false;
+    if (kind === 'title') return false;
+    return true;
+}
+
 function niCharPresenceTerms(c) {
     const terms = [];
     const addTerm = (text, kind = '') => {
         const t = String(text || '').trim();
         if (!t || t === '<user>' || /^user$/i.test(t)) return;
         if (t.length < 2) return;
-        if ((kind || '').toLowerCase() === 'title' && t.length < 3) return;
+        if ((kind || '').toLowerCase() === 'title') return;
         if (!terms.includes(t)) terms.push(t);
     };
-    addTerm(c?.name);
-    (Array.isArray(c?.aliases) ? c.aliases : []).forEach(alias => addTerm(alias?.text, alias?.kind));
+    const addNameTerms = (name, kind = '') => {
+        const raw = String(name || '').trim();
+        if (!raw) return;
+        addTerm(raw, kind);
+        const compact = raw.replace(/[\s·・•]/g, '');
+        if (compact && compact !== raw) addTerm(compact, kind);
+        if (!/^[\u3400-\u9fff]+$/.test(compact)) return;
+
+        const twoCharSurnames = ['欧阳', '司马', '上官', '诸葛', '东方', '南宫', '令狐', '皇甫', '尉迟', '公孙', '慕容', '夏侯', '司徒', '端木', '宇文', '长孙', '呼延', '独孤', '第五'];
+        const oneCharSurnames = '赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳酆鲍史唐费廉岑薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元卜顾孟平黄和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋庞熊纪舒屈项祝董梁杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刁钟徐邱骆高夏蔡田胡凌霍虞万支柯昝管卢莫经房裘缪干解应宗丁宣邓郁单杭洪包诸左石崔吉龚程邢滑裴陆荣翁荀羊於惠甄曲家封芮羿储靳汲邴糜松井段富巫乌焦巴弓牧隗山谷车侯宓蓬全郗班仰秋仲伊宫宁仇栾暴甘斜厉戎祖武符刘景詹束龙叶幸司韶郜黎蓟薄印宿白怀蒲邰从鄂索咸籍赖卓蔺屠蒙池乔阴胥能苍双闻莘党翟谭贡劳逄姬申扶堵冉宰郦雍璩桑桂濮牛寿通边扈燕冀浦尚农温别庄晏柴瞿阎充慕连茹习宦艾鱼容向古易慎戈廖庾终暨居衡步都耿满弘匡国文寇广禄阙东殴殳沃利蔚越夔隆师巩厍聂晁勾敖融冷訾辛阚那简饶空曾毋沙乜养鞠须丰巢关蒯相查后荆红游竺权逯盖益桓公';
+        const matchedTwo = twoCharSurnames.find(s => compact.startsWith(s));
+        if (matchedTwo && compact.length - matchedTwo.length >= 2) {
+            addTerm(compact.slice(matchedTwo.length), kind);
+        } else if (compact.length >= 3 && oneCharSurnames.includes(compact[0])) {
+            addTerm(compact.slice(1), kind);
+        }
+    };
+    addNameTerms(c?.name);
+    (Array.isArray(c?.aliases) ? c.aliases : []).forEach(alias => {
+        if (niCanUseAliasTextForPresence(alias)) addTerm(alias?.text, alias?.kind);
+    });
     return terms.sort((a, b) => b.length - a.length);
 }
 
@@ -4695,11 +4758,24 @@ function niPresenceHasTerm(normalizedText, term) {
     return !!needle && normalizedText.includes(needle);
 }
 
+function niCharNameMatchesTerm(c, term) {
+    const t = String(term || '').trim();
+    if (!c?.name || !t) return false;
+    if (_isSameChar(c, { name: t })) return true;
+    return (Array.isArray(c.aliases) ? c.aliases : []).some(alias => {
+        const aliasText = String(alias?.text || '').trim();
+        const ownerName = String(alias?.character_name || '').trim();
+        return (aliasText && _isSameChar({ name: aliasText }, { name: t })) ||
+            (ownerName && _isSameChar({ name: ownerName }, { name: t }));
+    });
+}
+
 function niGetStageChunkIdxSet(stageIdx) {
     const chunkIdxSet = new Set();
     if (S.chunkStageMap) {
         Object.entries(S.chunkStageMap).forEach(([rci, stageSet]) => {
-            if (stageSet?.has?.(stageIdx)) chunkIdxSet.add(Number(rci));
+            const stages = niStageListFromValue(stageSet).map(v => parseInt(v, 10));
+            if (stages.includes(stageIdx)) chunkIdxSet.add(Number(rci));
         });
     }
     if (!chunkIdxSet.size) {
@@ -4709,6 +4785,26 @@ function niGetStageChunkIdxSet(stageIdx) {
         });
     }
     return chunkIdxSet;
+}
+
+function niStageMetaMentionsChar(stageIdx, c) {
+    if (!Array.isArray(S.chunkMeta) || !c?.name) return false;
+    const chunkIdxSet = niGetStageChunkIdxSet(stageIdx);
+    return [...chunkIdxSet].some(ci => {
+        const meta = S.chunkMeta?.[ci];
+        if (!meta) return false;
+        const metaChars = Array.isArray(meta.characters) ? meta.characters : [];
+        if (metaChars.some(mc => niCharNameMatchesTerm(c, mc?.name || mc?.character_name))) return true;
+        const aliases = Array.isArray(meta.character_aliases)
+            ? meta.character_aliases
+            : (Array.isArray(meta.aliases) ? meta.aliases : []);
+        return aliases.some(alias => {
+            const ownerName = String(alias?.character_name || alias?.characterName || alias?.char || '').trim();
+            if (ownerName) return niCharNameMatchesTerm(c, ownerName);
+            if (!niCanUseAliasTextForPresence(alias)) return false;
+            return niCharNameMatchesTerm(c, alias?.text || alias?.name || alias?.alias || alias?.title);
+        });
+    });
 }
 
 async function niBuildStageTextForCharAutoSleep(stageIdx) {
@@ -4725,10 +4821,24 @@ async function niBuildStageTextForCharAutoSleep(stageIdx) {
             return String(S.chunkResults?.[ci] || '').trim();
         })
         .filter(Boolean);
-    if (parts.length) return parts.join('\n');
 
     const nodes = niMergeStageNodes(getNodesForStage(stageIdx));
-    return nodes.map(p => [p.title, p.time, p.location, p.body || p.content].filter(Boolean).join('\n')).join('\n');
+    const nodeText = nodes
+        .map(p => [
+            p.title,
+            p.time,
+            p.location,
+            p.body || p.content,
+            Array.isArray(p.sub_notes) ? p.sub_notes.join('\n') : '',
+            Array.isArray(p.branch_links) ? p.branch_links.join('\n') : '',
+        ].filter(Boolean).join('\n'))
+        .join('\n');
+    return [
+        parts.join('\n'),
+        S.stageTitles?.[stageIdx] || '',
+        S.stageSummaries?.[stageIdx] || '',
+        nodeText,
+    ].filter(text => String(text || '').trim()).join('\n');
 }
 
 async function niRunCharAutoSleepForStage(stageIdx) {
@@ -4738,14 +4848,31 @@ async function niRunCharAutoSleepForStage(stageIdx) {
     if (!normalizedText) return 0;
 
     let closed = 0;
+    let woke = 0;
     S.characters.forEach((c, idx) => {
-        if (!c?.name || c.enabled === false) return;
+        if (!c?.name) return;
         if ((c.role || '其他') === '主角') return;
-        if (niIsUserSubProtectedChar(c, idx)) return;
+        if (niIsUserSubProtectedChar(c, idx)) {
+            if (c._autoSleep) {
+                c.enabled = true;
+                niClearCharAutoSleep(c);
+                woke++;
+            }
+            return;
+        }
         const terms = niCharPresenceTerms(c);
         if (!terms.length) return;
-        const appeared = terms.some(term => niPresenceHasTerm(normalizedText, term));
-        if (appeared) return;
+        const appeared = niStageMetaMentionsChar(stageIdx, c) ||
+            terms.some(term => niPresenceHasTerm(normalizedText, term));
+        if (appeared) {
+            if (c._autoSleep) {
+                c.enabled = true;
+                niClearCharAutoSleep(c);
+                woke++;
+            }
+            return;
+        }
+        if (c.enabled === false) return;
         c.enabled = false;
         c._autoSleep = true;
         c._autoSleepStage = stageIdx;
@@ -4753,11 +4880,15 @@ async function niRunCharAutoSleepForStage(stageIdx) {
         closed++;
     });
 
-    if (closed > 0) {
+    if (closed > 0 || woke > 0) {
         niSaveSettings();
         renderCharacters();
         niRenderStageDrawer();
-        toastr?.info(`自动休眠 ${closed} 个未在第 ${stageIdx} 阶段正文出现的角色`);
+        const msg = [
+            closed > 0 ? `自动休眠 ${closed} 个未在第 ${stageIdx} 阶段正文出现的角色` : '',
+            woke > 0 ? `唤醒 ${woke} 个本阶段已出现的自动休眠角色` : '',
+        ].filter(Boolean).join('，');
+        toastr?.info(msg);
     }
     return closed;
 }
@@ -4782,11 +4913,12 @@ function niUserSubDefaultAliasesForChar(charIdx) {
     (Array.isArray(c.aliases) ? c.aliases : []).forEach(alias => {
         const text = (alias?.text || '').trim();
         if (!text || text === c.name) return;
+        const kind = String(alias.kind || 'alias').trim() || 'alias';
         const aliasStage = getCharFirstStage({ _firstChunkIdx: alias._chunkIdx }) || firstStage;
         out.push({
             text,
             firstStage: aliasStage,
-            kind: alias.kind || 'alias',
+            kind,
         });
     });
     const seen = new Set();
@@ -4796,6 +4928,65 @@ function niUserSubDefaultAliasesForChar(charIdx) {
         seen.add(key);
         return true;
     });
+}
+
+function niUserSubAliasLookupKey(text, kind = '') {
+    return `${String(text || '').trim()}@@${String(kind || '').trim().toLowerCase()}`;
+}
+
+function niNormalizeUserSubAliasesForSelectedChar(cfg) {
+    const idx = parseInt(cfg.userSubCharIdx, 10);
+    const c = S.characters[idx];
+    if (!c?.name || !Array.isArray(cfg.userSubAliases)) return false;
+
+    const firstStage = getCharFirstStage(c) || '';
+    const byTextKind = new Map();
+    const byText = new Map();
+    const addStage = (text, kind, stage) => {
+        const t = String(text || '').trim();
+        if (!t) return;
+        const k = String(kind || '').trim().toLowerCase();
+        const s = String(stage || '');
+        if (!s) return;
+        byTextKind.set(niUserSubAliasLookupKey(t, k), s);
+        if (!byText.has(t)) byText.set(t, s);
+    };
+
+    addStage(c.name, 'primary', firstStage);
+    (Array.isArray(c.aliases) ? c.aliases : []).forEach(alias => {
+        const text = String(alias?.text || '').trim();
+        if (!text) return;
+        const kind = String(alias?.kind || 'alias').trim() || 'alias';
+        const stage = getCharFirstStage({ _firstChunkIdx: alias._chunkIdx }) || firstStage;
+        addStage(text, kind, stage);
+    });
+
+    let changed = false;
+    let states = null;
+    let statesChanged = false;
+    cfg.userSubAliases.forEach(alias => {
+        if (!alias?.text || niUserSubAliasKind(alias) === 'custom') return;
+        const stage = byTextKind.get(niUserSubAliasLookupKey(alias.text, alias.kind)) ||
+            byText.get(String(alias.text || '').trim());
+        if (!stage || String(alias.firstStage || '') === String(stage)) return;
+
+        const oldKey = niUserSubAliasKey(alias);
+        alias.firstStage = String(stage);
+        changed = true;
+        const newKey = niUserSubAliasKey(alias);
+        if (oldKey && oldKey !== newKey) {
+            states = states || { ...niGetUserSubChatStates() };
+            if (Object.prototype.hasOwnProperty.call(states, oldKey)) {
+                states[newKey] = states[oldKey];
+                delete states[oldKey];
+                statesChanged = true;
+            }
+        }
+    });
+
+    if (statesChanged) niSaveUserSubChatStates(states).catch(e => console.warn('[NI] 用户代入称呼阶段迁移失败:', e));
+    if (changed) saveSettingsDebounced();
+    return changed;
 }
 
 function niUserSubStageReached(firstStage) {
@@ -4840,6 +5031,10 @@ function niGetUserSubAliasOverride(alias) {
     if (alias?.state === 'manual_on') return true;
     if (alias?.state === 'manual_off') return false;
     return null;
+}
+
+function niUserSubAliasKind(alias) {
+    return String(alias?.kind || 'custom').trim().toLowerCase();
 }
 
 function niUserSubAliasIsActive(alias) {
@@ -4925,6 +5120,7 @@ function niRenderUserSubUI() {
             `<option value="${i}"${String(selectedIdx) === String(i) ? ' selected' : ''}>${niEscHtml(c.name || `角色${i + 1}`)}</option>`
         ).join('');
 
+    niNormalizeUserSubAliasesForSelectedChar(cfg);
     const aliases = (cfg.userSubAliases || []).slice()
         .sort((a, b) => (parseInt(a.firstStage || 0, 10) || 0) - (parseInt(b.firstStage || 0, 10) || 0));
     list.innerHTML = aliases.length
@@ -6681,31 +6877,142 @@ function niGetRenderedChatMessages() {
 }
 
 function niGetCurrentChatMessages() {
-    const rendered = niGetRenderedChatMessages();
-    if (rendered.length) return rendered;
-    const ctx = getContext();
-    return Array.isArray(ctx?.chat) ? ctx.chat : [];
+    try {
+        const ctx = getContext();
+        if (Array.isArray(ctx?.chat)) {
+            return ctx.chat.filter(m => niDevMessageText(m));
+        }
+    } catch (_) {}
+    return niGetRenderedChatMessages();
 }
 
-function niBuildRecentChatText(limit) {
-    return niGetCurrentChatMessages().slice(-limit)
+function niDevMessageText(m) {
+    return String(m?.mes ?? m?.message ?? m?.content ?? '').trim();
+}
+
+function niDevMessageRole(m) {
+    const role = String(m?.role || '').toLowerCase();
+    if (m?.is_system || role === 'system') return '[系统]';
+    if (m?.is_user || role === 'user') return '[用户]';
+    return '[AI]';
+}
+
+function niNormalizeDevRange(range) {
+    if (!range) return null;
+    const start = parseInt(range.startFloor ?? range.start ?? range.from, 10);
+    const end = parseInt(range.endFloor ?? range.end ?? range.to, 10);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start <= 0 || end <= 0) return null;
+    const startFloor = Math.min(start, end);
+    const endFloor = Math.max(start, end);
+    return { startFloor, endFloor, count: endFloor - startFloor + 1 };
+}
+
+function niDevRangeLabel(range) {
+    const r = niNormalizeDevRange(range);
+    if (!r) return '当前范围';
+    return r.startFloor === r.endFloor ? `第 ${r.startFloor} 楼` : `第 ${r.startFloor}-${r.endFloor} 楼`;
+}
+
+function niBuildChatRangeContext(limit, range = null) {
+    const messages = niGetCurrentChatMessages();
+    const total = messages.length;
+    const safeLimit = Math.max(1, parseInt(limit, 10) || 1);
+    let r = niNormalizeDevRange(range);
+    if (!r) {
+        const covered = Math.max(0, Math.min(total, parseInt(S.devCoveredFloor, 10) || 0));
+        const startFloor = covered + 1;
+        if (startFloor > total) {
+            return { text: '', startFloor, endFloor: total, total, count: 0 };
+        }
+        r = { startFloor, endFloor: Math.min(total, startFloor + safeLimit - 1) };
+    }
+    if (!total || r.startFloor > total) {
+        return { text: '', startFloor: r?.startFloor || 1, endFloor: Math.min(r?.endFloor || 0, total), total, count: 0 };
+    }
+    const startFloor = Math.max(1, r.startFloor);
+    const endFloor = Math.min(total, Math.max(startFloor, r.endFloor));
+    const selected = messages.slice(startFloor - 1, endFloor).filter(m => niDevMessageText(m));
+    const text = selected
         .map(m => {
-            const role = m.is_system ? '[系统]' : (m.is_user ? '[用户]' : '[AI]');
-            return `${role} ${m.mes || ''}`;
+            return `${niDevMessageRole(m)} ${niDevMessageText(m)}`;
         })
         .join('\n');
+    return { text, startFloor, endFloor, total, count: selected.length };
+}
+
+function niGetDevRetryRange(auto = false) {
+    const saved = niNormalizeDevRange(S.devLastRange);
+    if (saved) return saved;
+    const covered = Math.max(0, parseInt(S.devCoveredFloor, 10) || 0);
+    if (!covered) return null;
+    const limit = niDevRecentMessageLimit(auto);
+    return niNormalizeDevRange({ startFloor: Math.max(1, covered - limit + 1), endFloor: covered });
+}
+
+function niBuildDeviationRangeBlock(range, guide, { keepEmpty = false } = {}) {
+    const text = String(guide || '').trim();
+    if (!text && !keepEmpty) return '';
+    return `【${niDevRangeLabel(range)}偏差】\n${text || '本范围未发现需要新增的重大偏差。'}`;
+}
+
+function niReplaceDeviationRangeBlock(existing, range, block) {
+    const text = String(existing || '').trim();
+    const nextBlock = String(block || '').trim();
+    if (!text) return nextBlock;
+    const title = `【${niDevRangeLabel(range)}偏差】`;
+    const start = text.indexOf(title);
+    if (start < 0) return [text, nextBlock].filter(Boolean).join('\n\n');
+    const rest = text.slice(start + title.length);
+    const nextHeader = /\n{2,}【第\s*\d+(?:\s*[-－—至]\s*\d+)?\s*楼偏差】/;
+    const next = rest.match(nextHeader);
+    const before = text.slice(0, start).trimEnd();
+    const after = next ? rest.slice(next.index).trimStart() : '';
+    return [before, nextBlock, after].filter(Boolean).join('\n\n');
+}
+
+function niMergeDeviationGuide(existing, guide, range, { retry = false } = {}) {
+    const block = niBuildDeviationRangeBlock(range, guide, { keepEmpty: retry });
+    const text = String(existing || '').trim();
+    if (!block) return text;
+    if (retry) return niReplaceDeviationRangeBlock(text, range, block);
+    return [text, block].filter(Boolean).join('\n\n');
+}
+
+function niSetDevProgress(range) {
+    const r = niNormalizeDevRange(range);
+    if (!r) return;
+    S.devCoveredFloor = Math.max(parseInt(S.devCoveredFloor, 10) || 0, r.endFloor);
+    S.devLastRange = r;
 }
 
 function niSetDevButtonState({ running = false } = {}) {
     const btn = q('#ni-btn-dev');
+    if (btn) {
+        btn.disabled = !!running;
+        btn.classList.toggle('loading', !!running);
+        btn.setAttribute('aria-busy', running ? 'true' : 'false');
+        const icon = document.createElement('i');
+        icon.className = running ? 'ti ti-loader' : 'ti ti-analyze';
+        icon.setAttribute('aria-hidden', 'true');
+        btn.replaceChildren(icon, document.createTextNode(running ? '分析中…' : niDevButtonLabel()));
+    }
+    niSetDevRetryButtonState({ running });
+}
+
+function niSetDevRetryButtonState({ running = false } = {}) {
+    const btn = q('#ni-dev-retry-btn');
     if (!btn) return;
-    btn.disabled = !!running;
-    btn.classList.toggle('loading', !!running);
+    const range = niGetDevRetryRange();
+    const hasRange = !!range;
+    const label = hasRange ? `重试${niDevRangeLabel(range)}` : '暂无可重试范围';
+    btn.disabled = !!running || !hasRange;
     btn.setAttribute('aria-busy', running ? 'true' : 'false');
-    const icon = document.createElement('i');
-    icon.className = running ? 'ti ti-loader' : 'ti ti-analyze';
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+    const icon = btn.querySelector('i') || document.createElement('i');
+    icon.className = running ? 'ti ti-loader' : 'ti ti-refresh';
     icon.setAttribute('aria-hidden', 'true');
-    btn.replaceChildren(icon, document.createTextNode(running ? '分析中…' : niDevButtonLabel()));
+    if (!icon.parentElement) btn.replaceChildren(icon);
 }
 
 function niSyncDevButtonLabel() {
@@ -6713,25 +7020,34 @@ function niSyncDevButtonLabel() {
     niSetDevButtonState({ running: false });
 }
 
-function niBuildDeviationPrompt(promptTemplate, reference, recentMsgs, existingDeviation) {
+function niBuildDeviationPrompt(promptTemplate, reference, recentMsgs, existingDeviation, rangeCtx = {}, mode = 'append') {
     const existingText = (existingDeviation || '').trim();
     const existingBlock = existingText || '（无）';
     const hasExistingSlot = /\{EXISTING(?:_DEVIATION)?\}/.test(promptTemplate || '');
+    const rangeLabel = niDevRangeLabel(rangeCtx);
     let prompt = (promptTemplate || DEV_PROMPT)
         .replace(/\{REFERENCE\}/g, reference.slice(0, 3000))
         .replace(/\{CURRENT\}/g, recentMsgs.slice(0, 2000))
+        .replace(/\{RANGE\}/g, rangeLabel)
         .replace(/\{EXISTING(?:_DEVIATION)?\}/g, existingBlock.slice(0, 3000));
 
     // 兼容用户保存过旧版/自定义提示词：没有占位符时仍注入旧偏差档案。
     if (existingText && !hasExistingSlot) {
-        prompt += `\n\n【偏差档案更新补充要求】\n以下是此前已经保存的当前偏差档案，代表当前分支现实中已经成立且仍需遵守的事实。除非当前正文明确推翻、改写或自然修正，否则不得删除、遗忘或降级。死亡、身份暴露、关系断裂、阵营改变、地点转移、能力变化、已完成的关键行动等硬事实，即使最近正文没有再次提到，也必须默认保留。请输出更新后的完整偏差档案，而不是只输出本次新增内容。\n<existing_deviation>\n${existingBlock.slice(0, 3000)}\n</existing_deviation>`;
+        prompt += `\n\n【已有偏差档案】\n以下是此前已经保存的当前偏差档案，代表当前分支现实中已经成立且仍需遵守的事实。旧偏差只作为上下文，除非当前正文明确推翻、改写或自然修正，否则不得删除、遗忘或降级。\n<existing_deviation>\n${existingBlock.slice(0, 3000)}\n</existing_deviation>`;
     }
+    const modeLine = mode === 'retry'
+        ? '这是对上一次偏差范围的重试。请只在本次范围内重新生成增补 JSON，用来替换该范围原来的结果。'
+        : (existingText
+            ? '这是在已有当前偏差基础上的增量更新。请只输出本次范围新增、修正或产生连锁影响的偏差增补。'
+            : '这是首次偏差分析。请只输出本次范围内已经成立的偏差档案。');
+    prompt += `\n\n【本次分析范围】\n${rangeLabel}（共 ${rangeCtx.count || 0} 楼）\n\n【本次运行强制要求】\n${modeLine}\n已有偏差档案不得被重写、压缩、删除、替换或完整复述。若旧偏差仍有效但本次范围没有带来新影响，不要重复搬运旧偏差。若本次范围没有新增重大偏差，JSON 数组可以为空，summary 简述“本范围未发现新增重大偏差”。`;
 
     return prompt;
 }
 
 async function niRunDev(options = {}) {
     const auto = !!options.auto;
+    const retry = !!options.retry;
     if (S.devRunning) return { ok: false, skipped: true, reason: 'running' };
 
     S.devRunning = true;
@@ -6746,7 +7062,21 @@ async function niRunDev(options = {}) {
         S.deviationGuide = existingDeviation;
 
         const recentLimit = niDevRecentMessageLimit(auto);
-        const recentMsgs = niBuildRecentChatText(recentLimit);
+        const retryRange = retry ? niGetDevRetryRange(auto) : null;
+        if (retry && !retryRange) {
+            if (noteEl) noteEl.textContent = '暂无可重试的偏差分析范围。';
+            return { ok: false, reason: 'no_retry_range' };
+        }
+        const chatCtx = niBuildChatRangeContext(recentLimit, retryRange);
+        const recentMsgs = chatCtx.text;
+        if (!chatCtx.count || !recentMsgs.trim()) {
+            if (noteEl) {
+                noteEl.textContent = retry
+                    ? '当前范围没有可分析正文，无法重试。'
+                    : '当前没有未总结的新楼层。需要重跑上一段请点「当前偏差」右上角的重试。';
+            }
+            return { ok: false, reason: 'no_new_chat', range: chatCtx };
+        }
 
         // 收集已开启阶段，区分已向量 / 未向量
         const enabledStages = Object.entries(S.stageStates)
@@ -6807,7 +7137,7 @@ async function niRunDev(options = {}) {
         const promptTemplate = q('#ni-dev-pt-content')?.value
             || extension_settings[EXT_NAME]?.devPrompt
             || DEV_PROMPT;
-        const prompt = niBuildDeviationPrompt(promptTemplate, reference, recentMsgs, existingDeviation);
+        const prompt = niBuildDeviationPrompt(promptTemplate, reference, recentMsgs, existingDeviation, chatCtx, retry ? 'retry' : 'append');
 
         const raw = await callCleanApi([{ role: 'user', content: prompt }]);
         const json = JSON.parse(raw.replace(/```json|```/g, '').trim());
@@ -6819,10 +7149,11 @@ async function niRunDev(options = {}) {
         });
         if (noteEl) noteEl.textContent = json.summary || '';
         const nextGuide = niBuildDeviationGuideFromAnalysis(json);
-        S.deviationGuide = nextGuide || existingDeviation;
+        S.deviationGuide = niMergeDeviationGuide(existingDeviation, nextGuide, chatCtx, { retry });
+        niSetDevProgress(chatCtx);
         niSyncDeviationResultUI({ collapsed: true });
         await niQueueDeviationGuideSave({ immediate: true });
-        return { ok: true, auto, recentLimit };
+        return { ok: true, auto, retry, recentLimit, range: chatCtx, coveredFloor: S.devCoveredFloor };
     } catch (e) {
         if (noteEl) noteEl.textContent = `分析失败: ${e.message}`;
         return { ok: false, error: e };
@@ -6841,8 +7172,11 @@ function niResetDevAutoCounter() {
     S.devAutoLastFloor = niCurrentChatFloorCount();
 }
 
-function niNotifyDevAutoComplete(recentLimit) {
-    const msg = `前文偏差已自动更新完成（本次读取最近 ${recentLimit} 层）。`;
+function niNotifyDevAutoComplete(result) {
+    const range = result?.range;
+    const msg = range?.count
+        ? `前文偏差已自动更新完成（本次更新${niDevRangeLabel(range)}）。`
+        : '前文偏差已自动更新完成。';
     alert(msg);
 }
 
@@ -6865,7 +7199,7 @@ async function niMaybeAutoRunDev() {
 
     const result = await niRunDev({ auto: true });
     S.devAutoLastFloor = floor;
-    if (result?.ok) niNotifyDevAutoComplete(result.recentLimit || niDevRecentMessageLimit(true));
+    if (result?.ok) niNotifyDevAutoComplete(result);
 }
 
 function niBindDeviationAutoUpdateEvents() {
@@ -7839,6 +8173,8 @@ async function niSaveNovelSnapshot(name) {
             _worldCategories: niGetWorldCategories(),
             _styleGuide: S.styleGuide || '',
             _deviationGuide: S.deviationGuide || '',
+            _devCoveredFloor: S.devCoveredFloor || 0,
+            _devLastRange: S.devLastRange || null,
         }),
     };
     cfg.novelLibrary.push(snap);
@@ -7884,6 +8220,8 @@ async function niUpdateNovelSnapshot(idx) {
         _worldCategories: niGetWorldCategories(),
         _styleGuide: S.styleGuide || '',
         _deviationGuide: S.deviationGuide || '',
+        _devCoveredFloor: S.devCoveredFloor || 0,
+        _devLastRange: S.devLastRange || null,
     });
     niSaveSettings();
     niRenderNovelLibrary();
@@ -7940,6 +8278,8 @@ async function niLoadNovelSnapshot(idx) {
     // Bug修复③：还原文风并立即刷新 UI（避免切换小说后文风显隐状态残留）
     S.styleGuide = (d._styleGuide != null) ? d._styleGuide : '';
     S.deviationGuide = (d._deviationGuide != null) ? d._deviationGuide : '';
+    S.devCoveredFloor = (d._devCoveredFloor != null) ? Math.max(0, parseInt(d._devCoveredFloor, 10) || 0) : 0;
+    S.devLastRange = d._devLastRange || null;
     {
         const resEl = q('#ni-style-result');
         if (resEl) resEl.value = S.styleGuide;
@@ -8017,12 +8357,12 @@ async function niDeleteNovelSnapshot(idx) {
             characters: [], plots: { main: [], sub: [], pivot: [] },
             stageStates: {}, stageSummaries: {}, stageTitles: {}, stageMap: {}, stageMapN: 0,
             vecDone: false, stageVecDone: {}, novelKey: '', heavyFileKey: '',
-            styleGuide: '', deviationGuide: '',
+            styleGuide: '', deviationGuide: '', devCoveredFloor: 0, devLastRange: null,
         });
         ['_characters','_plots','_stageStates','_stageSummaries','_stageTitles',
          '_chunkResults','_chunkStatus','_novelKey','_vecDone','_stageVecDone',
          '_cleanDone','_stageMap','_stageMapN','_chunkStageMap','_heavyFileKey',
-         '_styleGuide','_deviationGuide'].forEach(k => { delete cfg[k]; });
+         '_styleGuide','_deviationGuide','_devCoveredFloor','_devLastRange'].forEach(k => { delete cfg[k]; });
         S.chunkStageMap = null;
         S.worldCategories = null;
         // 重置 UI
@@ -8097,6 +8437,8 @@ async function niExportData() {
             _worldCategories: niGetWorldCategories(),
             _styleGuide: S.styleGuide || '',
             _deviationGuide: S.deviationGuide || '',
+            _devCoveredFloor: S.devCoveredFloor || 0,
+            _devLastRange: S.devLastRange || null,
             // Bug修复①②：导出时记录当前小说的名称，导入时直接使用，不依赖novelLibrary顺序
             _currentNovelName: (function() {
                 const lib = (extension_settings[EXT_NAME]?.novelLibrary) || [];
@@ -8189,7 +8531,7 @@ async function niImportData(file) {
                     || `导入-${new Date().toLocaleDateString()}`;
                 const heavyFileKey = niSnapshotFileKey(snapName, importedKey);
                 // 旧版 JSON 里重数据直接写服务端文件，snap.data 只存轻量字段
-                const oldS = { characters: S.characters, plots: S.plots, chunkResults: S.chunkResults, chunkMeta: S.chunkMeta, chunkStatus: S.chunkStatus, styleGuide: S.styleGuide, deviationGuide: S.deviationGuide };
+                const oldS = { characters: S.characters, plots: S.plots, chunkResults: S.chunkResults, chunkMeta: S.chunkMeta, chunkStatus: S.chunkStatus, styleGuide: S.styleGuide, deviationGuide: S.deviationGuide, devCoveredFloor: S.devCoveredFloor, devLastRange: S.devLastRange };
                 S.characters   = rt._characters   || [];
                 S.plots        = rt._plots        || { main: [], sub: [], pivot: [] };
                 niNormalizePlotCollections();
@@ -8198,6 +8540,8 @@ async function niImportData(file) {
                 S.chunkStatus  = rt._chunkStatus  || [];
                 S.styleGuide   = rt._styleGuide   || '';
                 S.deviationGuide = rt._deviationGuide || '';
+                S.devCoveredFloor = Math.max(0, parseInt(rt._devCoveredFloor, 10) || 0);
+                S.devLastRange = rt._devLastRange || null;
                 let heavyWriteNote = '';
                 try {
                     await niServerSaveHeavy(importedKey, heavyFileKey);
@@ -8210,6 +8554,8 @@ async function niImportData(file) {
                 S.chunkResults = oldS.chunkResults; S.chunkMeta = oldS.chunkMeta; S.chunkStatus = oldS.chunkStatus;
                 S.styleGuide = oldS.styleGuide;
                 S.deviationGuide = oldS.deviationGuide;
+                S.devCoveredFloor = oldS.devCoveredFloor;
+                S.devLastRange = oldS.devLastRange;
 
                 cfg.novelLibrary.push({
                     name: snapName,
@@ -8232,6 +8578,8 @@ async function niImportData(file) {
                         _worldCategories:rt._worldCategories,
                         _styleGuide:     rt._styleGuide || '',
                         _deviationGuide: rt._deviationGuide || '',
+                        _devCoveredFloor: Math.max(0, parseInt(rt._devCoveredFloor, 10) || 0),
+                        _devLastRange: rt._devLastRange || null,
                     }),
                 });
                 saveSettingsDebounced();
@@ -8317,7 +8665,7 @@ async function niImportData(file) {
         }
 
         // 把重数据写服务端文件（暂存到 S 再写再还原）
-        const oldS2 = { characters: S.characters, plots: S.plots, chunkResults: S.chunkResults, chunkMeta: S.chunkMeta, chunkStatus: S.chunkStatus, styleGuide: S.styleGuide, deviationGuide: S.deviationGuide };
+        const oldS2 = { characters: S.characters, plots: S.plots, chunkResults: S.chunkResults, chunkMeta: S.chunkMeta, chunkStatus: S.chunkStatus, styleGuide: S.styleGuide, deviationGuide: S.deviationGuide, devCoveredFloor: S.devCoveredFloor, devLastRange: S.devLastRange };
         S.characters   = rt._characters   || [];
         S.plots        = rt._plots        || { main: [], sub: [], pivot: [] };
         niNormalizePlotCollections();
@@ -8326,6 +8674,8 @@ async function niImportData(file) {
         S.chunkStatus  = rt._chunkStatus  || [];
         S.styleGuide   = rt._styleGuide   || '';
         S.deviationGuide = rt._deviationGuide || '';
+        S.devCoveredFloor = Math.max(0, parseInt(rt._devCoveredFloor, 10) || 0);
+        S.devLastRange = rt._devLastRange || null;
         let heavyWriteNote2 = '';
         try {
             await niServerSaveHeavy(importedKey, heavyFileKey);
@@ -8337,6 +8687,8 @@ async function niImportData(file) {
         S.chunkResults = oldS2.chunkResults; S.chunkMeta = oldS2.chunkMeta; S.chunkStatus = oldS2.chunkStatus;
         S.styleGuide = oldS2.styleGuide;
         S.deviationGuide = oldS2.deviationGuide;
+        S.devCoveredFloor = oldS2.devCoveredFloor;
+        S.devLastRange = oldS2.devLastRange;
 
         // 添加快照到小说库（snap.data 只存轻量字段）
         if (!cfg.novelLibrary) cfg.novelLibrary = [];
@@ -8361,6 +8713,8 @@ async function niImportData(file) {
                 _worldCategories:rt._worldCategories,
                 _styleGuide:     rt._styleGuide || '',
                 _deviationGuide: rt._deviationGuide || '',
+                _devCoveredFloor: Math.max(0, parseInt(rt._devCoveredFloor, 10) || 0),
+                _devLastRange: rt._devLastRange || null,
             }),
         });
         saveSettingsDebounced();
@@ -8410,7 +8764,7 @@ async function niClearAllData() {
             characters: [], plots: { main: [], sub: [], pivot: [] },
             stageStates: {}, stageSummaries: {}, stageTitles: {}, stageMap: {}, stageMapN: 0,
             vecDone: false, stageVecDone: {}, novelKey: '', heavyFileKey: '',
-            styleGuide: '', deviationGuide: '',
+            styleGuide: '', deviationGuide: '', devCoveredFloor: 0, devLastRange: null,
         });
         const cfg = extension_settings[EXT_NAME];
         if (oldNovelKey && Array.isArray(cfg.novelLibrary)) {
@@ -8419,7 +8773,7 @@ async function niClearAllData() {
         ['_characters','_plots','_stageStates','_stageSummaries','_stageTitles',
          '_chunkResults','_chunkStatus','_novelKey','_vecDone','_stageVecDone',
          '_cleanDone','_stageMap','_stageMapN','_chunkStageMap','_heavyFileKey',
-         '_styleGuide','_deviationGuide'].forEach(k => { delete cfg[k]; });
+         '_styleGuide','_deviationGuide','_devCoveredFloor','_devLastRange'].forEach(k => { delete cfg[k]; });
         S.chunkStageMap = null;
         S.worldCategories = null;
         saveSettingsDebounced();
@@ -8855,16 +9209,30 @@ jQuery(async () => {
     });
     $app.on('input', '#ni-dev-result', function() {
         S.deviationGuide = this.value;
+        if (!this.value.trim()) {
+            S.devCoveredFloor = 0;
+            S.devLastRange = null;
+        }
         if (this.value.trim()) niSyncDeviationResultUI({ preserveBody: true });
-        else niSyncDevButtonLabel();
+        else niSyncDeviationResultUI({ preserveBody: true });
         niQueueDeviationGuideSave();
     });
     $app.on('blur', '#ni-dev-result', async function() {
         S.deviationGuide = this.value;
+        if (!this.value.trim()) {
+            S.devCoveredFloor = 0;
+            S.devLastRange = null;
+        }
         await niQueueDeviationGuideSave({ immediate: true });
         niSyncDeviationResultUI({ preserveBody: true });
     });
-    $app.on('click', '#ni-dev-result-toggle', () => {
+    $app.on('click', '#ni-dev-retry-btn', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        await niRunDev({ retry: true });
+    });
+    $app.on('click', '#ni-dev-result-toggle', (e) => {
+        if (e.target?.closest?.('#ni-dev-retry-btn')) return;
         const body = q('#ni-dev-result-body');
         const btn  = q('#ni-dev-result-toggle i:last-child');
         if (!body) return;

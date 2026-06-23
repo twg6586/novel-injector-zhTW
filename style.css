@@ -2747,6 +2747,55 @@ select.ni-modal-input {
     margin-top: 10px;
 }
 
+.ni-dev-result-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.ni-dev-floor-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: var(--color-background-secondary);
+    color: var(--color-text-tertiary);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+    white-space: nowrap;
+}
+
+.ni-dev-retry-btn {
+    width: 22px;
+    height: 22px;
+    margin-left: auto;
+    margin-right: 6px;
+    padding: 0;
+    border: .5px solid var(--color-border-secondary);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--color-text-tertiary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.ni-dev-retry-btn:hover:not(:disabled) {
+    background: var(--color-background-secondary);
+    color: var(--color-text-secondary);
+}
+.ni-dev-retry-btn:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+}
+.ni-dev-retry-btn i {
+    font-size: 13px;
+}
+
 #ni-style-result,
 #ni-dev-result {
     width: 100%;
