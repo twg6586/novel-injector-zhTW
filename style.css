@@ -2018,9 +2018,6 @@ select.ni-modal-input {
   padding: 8px 10px;
   resize: vertical;
 }
-#ni-user-sub-prompt-preview[readonly] {
-  cursor: default;
-}
 .ni-user-sub-grid {
   display: grid;
   grid-template-columns: 70px minmax(0, 1fr);
@@ -2635,8 +2632,31 @@ select.ni-modal-input {
 
 /* ── 角色人设四字段 ── */
 .ni-char-detail { margin-top: 6px; margin-bottom: 6px; margin-left: 34px; margin-right: 0; overflow: hidden; border: .5px solid var(--ni-primary-border, #DDB5C0); border-radius: 6px; }
-.ni-char-detail:has(.ni-char-raw-closed) { padding-right: 10px; }
 .ni-char-detail .ni-af-grid { border: none; border-radius: 0; }
+.ni-char-raw-profile { background: var(--color-background-primary); }
+.ni-char-raw-profile-off { background: var(--color-background-secondary); }
+.ni-char-raw-hdr {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px 5px;
+  border-bottom: 1px dashed var(--ni-primary-border, #DDB5C0);
+}
+.ni-char-raw-lbl {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 10px; font-weight: 600; color: var(--ni-primary, #A0445E);
+  letter-spacing: .04em; flex: 1;
+}
+.ni-char-raw-lbl i { font-size: 11px; }
+.ni-char-raw-body { min-height: 30px; }
+.ni-char-raw-empty,
+.ni-char-raw-off-text {
+  display: block;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--color-text-tertiary);
+  font-style: italic;
+}
+.ni-char-raw-off-text { opacity: .72; }
 
 .ni-af-grid {
   display: grid;
@@ -2665,7 +2685,6 @@ select.ni-modal-input {
   display: flex; align-items: center; gap: 4px;
 }
 .ni-char-field-lbl i { font-size: 11px; }
-.ni-char-field-lbl .ni-char-eye-raw i { font-size: 15px; }
 .ni-char-field-val {
   font-size: 12px; color: var(--color-text-primary);
   line-height: 1.55;
@@ -2813,16 +2832,9 @@ select.ni-modal-input {
 .ni-cache-info { font-size: 11px; color: var(--color-text-secondary); padding: 4px 0; }
 .ni-cache-info strong { color: var(--color-text-primary); }
 
-/* 原始人设眼睛——在外貌标题行最右 */
+/* 原始人设眼睛——固定在原始人设标题行 */
 .ni-char-detail-wrap { position: relative; }
-.ni-char-field-lbl .ni-char-eye-raw { flex-shrink: 0; }
-/* 关闭状态同行 */
-.ni-char-raw-closed {
-  display: flex; flex-direction: row; align-items: center;
-  padding: 6px 8px; width: 100%; box-sizing: border-box;
-}
-.ni-char-raw-closed > span { font-style: italic; opacity: .6; flex: 1; }
-.ni-char-raw-closed > .ni-char-eye-raw { margin-left: auto !important; flex-shrink: 0; margin-right: 10px; }
+.ni-char-raw-hdr .ni-char-eye-raw { flex-shrink: 0; }
 
 /* ============================================================
    世界设定模块

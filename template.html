@@ -628,24 +628,6 @@
           <div class="ni-field" style="margin-top:10px;margin-bottom:0">
             <div style="display:flex;align-items:center;justify-content:space-between">
               <label style="display:flex;align-items:center;gap:5px">
-                <i class="ti ti-tag" style="font-size:12px"></i>归纳
-                <span style="font-size:10px;color:var(--color-text-secondary);font-weight:400">每轮附加召回标签</span>
-              </label>
-              <label class="ni-toggle-wrap">
-                <input type="checkbox" id="ni-tb-query-mode">
-                <span class="ni-cfg-chk"><i class="ti ti-check"></i></span>
-              </label>
-            </div>
-            <div style="font-size:11px;color:var(--color-text-secondary);margin-top:6px;line-height:1.6">
-              ① 开启后推进/持续提示词末尾自动追加归纳指令，AI 每次回复生成
-              <code style="background:rgba(0,0,0,.08);padding:1px 4px;border-radius:3px">&lt;ni_query&gt;人物 | 地点 | 事件&lt;/ni_query&gt;</code>标签。<br>
-              ② 自动将 <code style="background:rgba(0,0,0,.08);padding:1px 4px;border-radius:3px">ni_query</code> 追加到「召回时提取的消息内容」，关闭时自动移除。<br>
-              ③ 标签对用户不可见，不影响正文阅读。④ 加权召回始终生效，与本开关无关。
-            </div>
-          </div>
-          <div class="ni-field" style="margin-top:10px;margin-bottom:0">
-            <div style="display:flex;align-items:center;justify-content:space-between">
-              <label style="display:flex;align-items:center;gap:5px">
                 <i class="ti ti-filter" style="font-size:12px"></i>轻量化召回
                 <span style="font-size:10px;color:var(--color-text-secondary);font-weight:400">按当前节点裁切未来内容</span>
               </label>
@@ -681,15 +663,6 @@
                 <button class="ni-pt-reset" id="ni-tb-ongoing-reset" title="恢复默认" style="position:static;opacity:.6"><i class="ti ti-rotate"></i></button>
               </div>
               <textarea id="ni-tb-ongoing-prompt" class="ni-pt-textarea" rows="4" spellcheck="false" style="font-size:11px;line-height:1.6;padding:8px 10px;border:.5px solid var(--color-border-secondary);border-radius:6px;background:var(--color-background-secondary);color:var(--color-text-primary);resize:vertical;width:100%;font-family:inherit"></textarea>
-            </div>
-
-            <!-- 归纳提示词 -->
-            <div>
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-                <label style="font-size:12px;color:var(--color-text-secondary)"><i class="ti ti-tag" style="font-size:11px"></i> 归纳提示词（归纳开关开启时追加）</label>
-                <button class="ni-pt-reset" id="ni-tb-query-reset" title="恢复默认" style="position:static;opacity:.6"><i class="ti ti-rotate"></i></button>
-              </div>
-              <textarea id="ni-tb-query-prompt" class="ni-pt-textarea" rows="4" spellcheck="false" style="font-size:11px;line-height:1.6;padding:8px 10px;border:.5px solid var(--color-border-secondary);border-radius:6px;background:var(--color-background-secondary);color:var(--color-text-primary);resize:vertical;width:100%;font-family:inherit"></textarea>
             </div>
 
             <!-- 沉浸提示词 -->
@@ -891,7 +864,7 @@
                   <label><i class="ti ti-code"></i> 当前生效提示词</label>
                   <span id="ni-user-sub-prompt-state">未开启</span>
                 </div>
-                <textarea id="ni-user-sub-prompt-preview" class="ni-pt-textarea" rows="6" spellcheck="false" readonly></textarea>
+                <textarea id="ni-user-sub-prompt-preview" class="ni-pt-textarea" rows="6" spellcheck="false"></textarea>
               </div>
             </div>
           </div>

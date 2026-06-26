@@ -71,6 +71,10 @@ const EXT_FOLDER = _detectExtFolder();
 const DB_NAME = 'NovelInjectorVectors';
 const DB_VERSION = 2;
 const DB_STORE = 'chunks';
+const USER_SUB_BOUNDARY_PROMPT = `[关于用户角色]
+<user>不是原著主角或任何原著角色；原著主角/配角默认作为故事中的NPC处理。
+不要把原著角色经历、剧情事件、身份关系、称呼归属、原作行动或原著角色曾经做出的选择自动映射到 <user>。
+[/关于用户角色]`;
 
 const TAVERN_TASK_SWITCH_PROMPT = `当你收到 Novel Injector 发出的后台任务指令时，将当前请求视为工具任务，而不是 RP、续写、聊天回复、角色扮演回合或前台剧情推进。
 不要以当前角色身份回应，不要读取、延续或改写前台聊天，不要加入寒暄、解释、免责声明或 Markdown 代码块。
@@ -407,7 +411,7 @@ const DEV_PROMPT = `你是小说剧情偏差分析与分支现实整理师。
 
 你的任务不是强行把当前剧情拉回原著，而是维护一份可注入给后续写作模型的“新现实约束”。
 如果已有偏差档案为空，本次是首次分析：判断当前正文是否已经形成会改变后续走向的关键偏差。
-如果已有偏差档案非空，本次是更新偏差档案：旧偏差只作为上下文，已改变事实只输出本次新增或修正后需要追加的锚点；当前偏差约束和仍保留的原著事实必须输出更新后的完整内容。
+如果已有偏差档案非空，本次是更新偏差档案：旧偏差只作为上下文，已改变事实只输出本次新增或修正后需要追加的长期锚点；当前偏差约束和仍保留的原著事实必须输出更新后的完整内容。
 最终输出必须是本次范围的 JSON，不要输出 Markdown 或结构外文字。
 
 请严格按 JSON 输出，不要输出 Markdown、代码块或结构外文字：
@@ -428,7 +432,7 @@ const DEV_PROMPT = `你是小说剧情偏差分析与分支现实整理师。
     }
   ],
   "changed_facts": [
-    "后续必须承认的新事实，写成简短明确的约束"
+    "后续必须长期承认的新事实锚点，写成简短明确的约束"
   ],
   "preserved_facts": [
     "仍应继续遵守的原著事实，避免把所有内容都推翻"
@@ -438,12 +442,12 @@ const DEV_PROMPT = `你是小说剧情偏差分析与分支现实整理师。
 
 判断规则：
 1. 分数字段仍表示当前正文与原著的贴合度，0-100，越高越贴合。
-2. 只有当前正文已经明确写成事实、角色已经承认、行动已经发生、关系已经改变、地点/生死/阵营/能力等状态已经成立时，才列入 major_deviations。
+2. 只有当前正文已经明确写成事实、角色已经承认、行动已经发生、关系已经改变、生死/阵营/能力/身份暴露等状态已经成立时，才列入 major_deviations。
 3. 如果只是语气轻微不同、细节缺失、暂时没提到，不要列为重大偏差。
 4. 如果当前正文已经让某个原著关键事件不再可能按原样发生，应标记 irreversible 为 true。
 5. 对 irreversible 为 true 的偏差，后续写作必须承认当前正文为新的现实，不能用同一事件、同一事故、同一理由强行恢复原著结果。
 6. 对尚未明确成立、仍可自然拉回原著的偏差，irreversible 为 false，并在 current_deviation_constraint 中建议温和回收，而不是硬改。
-7. changed_facts 只写本次范围新增、修正后需要追加、且后续必须承认的新事实锚点；不要重复搬运已有偏差档案中的旧锚点。
+7. changed_facts 只写本次范围新增、修正后需要追加、且后续长期有效的新事实锚点；不要重复搬运已有偏差档案中的旧锚点。
 8. current_deviation_constraint 是本次更新后的完整当前约束，必须合并“当前偏差约束”和“主要偏差”的执行含义；不要只写本次增补。
 9. preserved_facts 是本次更新后仍然有效的原著事实完整列表，只保留尚未发生、未过期、未被当前正文推翻、且不会误导后续写作的原著逻辑。
 10. current_deviation_constraint 应该是给后续写作模型看的，不要分析打分，不要解释 JSON，只写执行约束。
@@ -451,13 +455,15 @@ const DEV_PROMPT = `你是小说剧情偏差分析与分支现实整理师。
     - 当前正文已经成立的新事实优先于原著冲突事实。
     - 原著中未被当前正文推翻的设定仍然有效。
     - 后续剧情要基于新事实自然推演连锁反应，而不是强行复刻原著事件。
-12. 已有偏差档案中的“已改变事实”，除非当前正文明确推翻、改写或自然修正，否则不得删除、遗忘或降级。
-13. 死亡、身份暴露、关系断裂、阵营改变、地点转移、能力变化、已完成的关键行动等硬事实，即使最近正文没有再次提到，也必须默认保留。
-14. 不要把当前正文已经成立并影响剧情的事实降格写成“user认为”“用户认为”“读者认为”“玩家认为”“用户一厢情愿”等出戏主体的单方面认定；进入正文并影响剧情的内容就是当前分支事实。
-15. 如果剧情本身是在描写信息差、隐瞒、误导、视角角色误判或角色尚不知真相，应记录为剧内认知状态，例如“当前视角角色误以为……”“某角色尚不知……”，不要改写成全知事实。
-16. 如果当前正文明确指出、修正或采用了原著设定漏洞、动机矛盾、未处理的逻辑问题、世界观解释差异，应记录为当前分支事实或偏差约束，而不是写成用户的单方面认定。
-17. 若当前正文新增了会改变后续走向的事实，应写入本次 changed_facts 中。
-18. 若旧偏差被当前正文明确修正，应在 summary 与 current_deviation_constraint 中简要说明修正后的约束。
+12. changed_facts 与 current_deviation_constraint 必须分层：死亡、身份暴露、关系断裂、阵营改变、能力变化、已完成的关键行动等长期事实放入 changed_facts；<user> 或角色的当前所在地、同行者、临时目标、正在执行的动作、短期情绪与暂时处境只写进 current_deviation_constraint。
+13. 如果旧 changed_facts 中已有“<user> 当前在 A 地/正在做 A 事/与某人同行”等会随剧情推进过期的当前状态，而本次正文明确移动到 B 地或进入新处境，不要继续强化旧状态；应在 summary 和 current_deviation_constraint 中写明最新状态，以最新状态为准。
+14. 已有偏差档案中的长期“已改变事实”，除非当前正文明确推翻、改写或自然修正，否则不得删除、遗忘或降级。
+15. 死亡、身份暴露、关系断裂、阵营改变、能力变化、已完成的关键行动等硬事实，即使最近正文没有再次提到，也必须默认保留；地点只在表示长期归属、封锁、流放、不可逆迁移等稳定结果时才作为长期锚点。
+16. 不要把当前正文已经成立并影响剧情的事实降格写成“user认为”“用户认为”“读者认为”“玩家认为”“用户一厢情愿”等出戏主体的单方面认定；进入正文并影响剧情的内容就是当前分支事实。
+17. 如果剧情本身是在描写信息差、隐瞒、误导、视角角色误判或角色尚不知真相，应记录为剧内认知状态，例如“当前视角角色误以为……”“某角色尚不知……”，不要改写成全知事实。
+18. 如果当前正文明确指出、修正或采用了原著设定漏洞、动机矛盾、未处理的逻辑问题、世界观解释差异，应记录为当前分支事实或偏差约束，而不是写成用户的单方面认定。
+19. 若当前正文新增了会改变后续走向且长期有效的事实，应写入本次 changed_facts 中；若只是当前状态变化，写入 current_deviation_constraint。
+20. 若旧偏差被当前正文明确修正，应在 summary 与 current_deviation_constraint 中简要说明修正后的约束。
 
 输出前暗中自检，不输出自检过程：
 - 是否是合法 JSON。
@@ -687,6 +693,9 @@ const DEFAULT_SETTINGS = {
     userSubMode: 'replace', // 'replace'=替换原角人生 | 'play'=扮演原角本人
     userSubCharIdx: '',
     userSubAliases: [],
+    userSubPromptReplace: null,
+    userSubPromptPlay: null,
+    userSubBoundaryPrompt: USER_SUB_BOUNDARY_PROMPT,
 };
 
 // ============================================================
@@ -978,13 +987,10 @@ function niLoadSettings() {
         });
         const subArr2 = S.plots.sub || [];
         subArr2.forEach(plot => {
-            let mapped = plot._chunkIdx != null ? (S.stageMap[plot._chunkIdx] ?? S.stageMap[String(plot._chunkIdx)]) : undefined;
-            if (mapped === undefined) {
-                const mainIdx = mainArr2.findIndex(p => p._chunkIdx === plot._chunkIdx);
-                if (mainIdx !== -1) mapped = S.stageMap[mainIdx] ?? S.stageMap[String(mainIdx)];
-            }
-            if (mapped !== undefined && plot.stageIdx == null) { plot.stageIdx = mapped; plot.stageLabel = `第 ${mapped} 阶段`; }
+            const mapped = niResolveSubPlotStageIdx(plot);
+            if (mapped !== null && plot.stageIdx == null) { plot.stageIdx = mapped; plot.stageLabel = `第 ${mapped} 阶段`; }
         });
+        niSyncSubPlotStageAssignments();
     }
 
     syncSettingsToUI();
@@ -3643,6 +3649,7 @@ function niApplyManualPlotOrderForType(type, orderedRefs = null) {
     });
     S.plots[type] = refs;
     niRebuildStageMapFromPlotStageIdx();
+    niSyncSubPlotStageAssignments();
 }
 
 function niMovePlotByDisplayPosition(type, fromPos, toPos) {
@@ -3670,6 +3677,7 @@ function niNormalizePlotCollections() {
         niSortPlotsByStoryOrder(S.plots[type]);
     });
     niRebuildStageMapFromPlotStageIdx();
+    niSyncSubPlotStageAssignments();
 }
 
 function niCapturePlotOrderMemory() {
@@ -4154,6 +4162,7 @@ ${JSON.stringify(subList, null, 2)}
             if (newLinks.length) patched++;
         });
 
+        niSyncSubPlotStageAssignments();
         niSaveSettings();
         renderPlots();
         toastr?.success(`修补完成，共关联 ${patched} 个节点。`);
@@ -4177,14 +4186,82 @@ let _plotModalMode = 'add';       // 'add' | 'edit'
 let _plotInsertAt = null;          // null = append | number = insert before this index
 let _currentPlotTab = 'timeline'; // 当前激活tab
 
+function niPlotStageNumber(value) {
+    const n = parseInt(value, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function niGetPrimaryPlotEntries() {
+    return niOrderedPlotEntries([
+        { type: 'main', items: S.plots.main || [] },
+        { type: 'pivot', items: S.plots.pivot || [] },
+    ]);
+}
+
+function niGetSubParentPlotEntries(subTitle) {
+    const title = String(subTitle || '').trim();
+    if (!title) return [];
+    return niGetPrimaryPlotEntries().filter(parent =>
+        Array.isArray(parent.branch_links) &&
+        parent.branch_links.includes(title)
+    );
+}
+
+function niPickNearestStageFromPlots(subPlot, candidates) {
+    const usable = (candidates || [])
+        .map(parent => ({ parent, stage: niPlotStageNumber(parent?.stageIdx ?? parent?._plotRef?.stageIdx) }))
+        .filter(item => item.stage != null);
+    if (!usable.length) return null;
+
+    const subOrder = niPlotStoryOrder(subPlot, 0);
+    usable.sort((a, b) => {
+        const ao = niPlotStoryOrder(a.parent, 0);
+        const bo = niPlotStoryOrder(b.parent, 0);
+        return Math.abs(ao - subOrder) - Math.abs(bo - subOrder) || ao - bo;
+    });
+    return usable[0].stage;
+}
+
+function niGetSingleChunkStage(chunkIdx) {
+    if (chunkIdx == null || !S.chunkStageMap) return null;
+    const stages = S.chunkStageMap[chunkIdx] ?? S.chunkStageMap[String(chunkIdx)];
+    const list = niStageListFromValue(stages)
+        .map(niPlotStageNumber)
+        .filter(v => v != null);
+    const unique = [...new Set(list)];
+    return unique.length === 1 ? unique[0] : null;
+}
+
+function niResolveSubPlotStageIdx(plot) {
+    if (!plot) return null;
+    const parentStage = niPickNearestStageFromPlots(plot, niGetSubParentPlotEntries(plot.title));
+    if (parentStage != null) return parentStage;
+
+    const chunkStage = niGetSingleChunkStage(plot._chunkIdx);
+    if (chunkStage != null) return chunkStage;
+
+    const sameChunk = niGetPrimaryPlotEntries()
+        .filter(parent => parent?._chunkIdx === plot._chunkIdx);
+    return niPickNearestStageFromPlots(plot, sameChunk);
+}
+
+function niSyncSubPlotStageAssignments() {
+    let changed = false;
+    (S.plots.sub || []).forEach(plot => {
+        const mapped = niResolveSubPlotStageIdx(plot);
+        if (mapped == null || plot.stageIdx === mapped) return;
+        plot.stageIdx = mapped;
+        plot.stageLabel = `第 ${mapped} 阶段`;
+        changed = true;
+    });
+    return changed;
+}
+
 function niFindMainParentForSubTitle(subTitle) {
     if (!subTitle) return '';
-    const main = S.plots.main || [];
-    const mainIdx = main.findIndex(p => Array.isArray(p.branch_links) && p.branch_links.includes(subTitle));
-    if (mainIdx >= 0) return `main:${mainIdx}`;
-    const pivot = S.plots.pivot || [];
-    const pivotIdx = pivot.findIndex(p => Array.isArray(p.branch_links) && p.branch_links.includes(subTitle));
-    return pivotIdx >= 0 ? `pivot:${pivotIdx}` : '';
+    const parent = niGetSubParentPlotEntries(subTitle)[0];
+    if (!parent) return '';
+    return `${parent._type}:${parent._sourceIdx}`;
 }
 
 function niRefreshPlotParentField(type, subTitle = '') {
@@ -4338,6 +4415,7 @@ function niSavePlotModal() {
             }
         }
     }
+    niSyncSubPlotStageAssignments();
     niSaveSettings();
     renderPlots();
     niClosePlotModal();
@@ -4417,6 +4495,11 @@ function niRenderAiFields(profile) {
     return `<div class="ni-af-grid">${leftHtml}${rightHtml}</div>`;
 }
 
+function niCharRawEyeButton(c, i) {
+    const rawEyeOn = c.showRaw !== false;
+    return `<button class="ni-char-eye ni-char-eye-raw${rawEyeOn ? ' on' : ''}" data-char-idx="${i}" title="原始人设注入开/关"><i class="ti ${rawEyeOn ? 'ti-eye' : 'ti-eye-off'}"></i></button>`;
+}
+
 function renderCharacters() {
     const list = q('#ni-char-list');
     if (!list) return;
@@ -4452,24 +4535,7 @@ function renderCharacters() {
         const autoSleepBadge = (!enabled && c._autoSleep)
             ? `<div class="ni-char-sleep-badge" title="${niEscAttr(autoSleepTitle)}">自动休眠</div>`
             : '';
-        const fields = [
-            { key: 'identity',    icon: 'ti-id-badge',  label: '身份背景' },
-            { key: 'appearance',  icon: 'ti-eye',        label: '外貌'     },
-            { key: 'personality', icon: 'ti-sparkles',   label: '性格'     },
-            { key: 'relations',   icon: 'ti-users',      label: '关系'     },
-        ];
-        const rawEyeOn = c.showRaw !== false;
-        const eyeBtnHtml = `<button class="ni-char-eye ni-char-eye-raw${rawEyeOn ? ' on' : ''}" data-char-idx="${i}" title="原始人设注入开/关"><i class="ti ${rawEyeOn ? 'ti-eye' : 'ti-eye-off'}"></i></button>`;
-        const renderRawField = (f, injectEye = false) => {
-            const val = c[f.key] || '';
-            if (!val) return '';
-            const lbl = `<div class="ni-char-field-lbl"><span class="ni-char-field-lbl-text"><i class="ti ${f.icon}"></i>${f.label}</span>${injectEye ? eyeBtnHtml : ''}</div>`;
-            return `<div class="ni-char-field ni-af-item">${lbl}<span class="ni-char-field-val">${niEscHtml(val)}</span></div>`;
-        };
-        const rawCells = fields.map((f, idx) => renderRawField(f, idx === 1)).join('');
-        const detailHtml = rawCells
-            ? `<div class="ni-af-grid">${rawCells}</div>`
-            : '';
+        const detailHtml = niRenderRawDetail(c, i);
         const aiEyeOn  = c.showAi  !== false;
 
         const hasAiContent = c.aiProfile && (
@@ -4577,8 +4643,8 @@ function renderCharacters() {
             </div>
           </div>
           <div class="ni-char-detail-wrap">
-            <div class="ni-char-detail" id="ni-cbio-${i}" style="${rawEyeOn ? '' : 'opacity:.4;font-style:italic'}">
-              ${rawEyeOn ? (detailHtml || '<span style="opacity:.5">暂无人设</span>') : `<div class="ni-char-field-lbl ni-char-raw-closed"><span class="ni-char-field-lbl-text">（原始人设已关闭注入）</span><button class="ni-char-eye ni-char-eye-raw" data-char-idx="${i}" title="原始人设注入开/关"><i class="ti ti-eye-off"></i></button></div>`}
+            <div class="ni-char-detail" id="ni-cbio-${i}">
+              ${detailHtml}
             </div>
           </div>
           ${aiProfileHtml}
@@ -4675,15 +4741,22 @@ function niRenderRawDetail(c, i) {
         { key: 'personality', icon: 'ti-sparkles',   label: '性格'     },
         { key: 'relations',   icon: 'ti-users',      label: '关系'     },
     ];
-    const eyeBtnHtml = `<button class="ni-char-eye ni-char-eye-raw${rawEyeOn ? ' on' : ''}" data-char-idx="${i}" title="原始人设注入开/关"><i class="ti ${rawEyeOn ? 'ti-eye' : 'ti-eye-off'}"></i></button>`;
-    const cells = fields.map((f, idx) => {
+    const cells = fields.map((f) => {
         const val = c[f.key] || '';
         if (!val) return '';
-        const lbl = `<div class="ni-char-field-lbl"><span class="ni-char-field-lbl-text"><i class="ti ${f.icon}"></i>${f.label}</span>${idx === 1 ? eyeBtnHtml : ''}</div>`;
+        const lbl = `<div class="ni-char-field-lbl"><span class="ni-char-field-lbl-text"><i class="ti ${f.icon}"></i>${f.label}</span></div>`;
         return `<div class="ni-char-field ni-af-item">${lbl}<span class="ni-char-field-val">${niEscHtml(val)}</span></div>`;
     }).join('');
-    if (!cells) return '';
-    return `<div class="ni-af-grid">${cells}</div>`;
+    const body = rawEyeOn
+        ? (cells ? `<div class="ni-af-grid">${cells}</div>` : '<span class="ni-char-raw-empty">暂无人设</span>')
+        : '<span class="ni-char-raw-off-text">（原始人设已关闭注入）</span>';
+    return `<div class="ni-char-raw-profile${rawEyeOn ? '' : ' ni-char-raw-profile-off'}">
+        <div class="ni-char-raw-hdr">
+          <span class="ni-char-raw-lbl"><i class="ti ti-id-badge"></i>原始人设</span>
+          ${niCharRawEyeButton(c, i)}
+        </div>
+        <div class="ni-char-raw-body">${body}</div>
+      </div>`;
 }
 function niSaveChar(i) {
     const form = q(`#ni-cef-${i}`);
@@ -4731,13 +4804,9 @@ function niSaveChar(i) {
     if (detailEl) detailEl.style.display = '';
     if (detailEl && S.characters[i]) {
         const c = S.characters[i];
-        const rawEyeOn = c.showRaw !== false;
-        const detailInner = niRenderRawDetail(c, i);
-        detailEl.innerHTML = rawEyeOn
-            ? (detailInner || '<span style="opacity:.5">暂无人设</span>')
-            : `<div class="ni-char-field-lbl ni-char-raw-closed"><span class="ni-char-field-lbl-text">（原始人设已关闭注入）</span><button class="ni-char-eye ni-char-eye-raw" data-char-idx="${i}" title="原始人设注入开/关"><i class="ti ti-eye-off"></i></button></div>`;
-        detailEl.style.opacity = rawEyeOn ? '' : '.4';
-        detailEl.style.fontStyle = rawEyeOn ? '' : 'italic';
+        detailEl.innerHTML = niRenderRawDetail(c, i);
+        detailEl.style.opacity = '';
+        detailEl.style.fontStyle = '';
     }
     // 刷新头部显示（分类、性别、初次登场），无需整体重绘
     if (S.characters[i]) {
@@ -5435,7 +5504,31 @@ function niGetSelectedUserSubCharName() {
     return (S.characters?.[idx]?.name || '').trim();
 }
 
-function niBuildUserSubIdentityPrompt() {
+function niGetUserSubPromptState(cfg = niGetUserSubConfig()) {
+    if (!cfg.userSubEnabled) return 'boundary';
+    return niIsUserSubPlayMode(cfg) ? 'play' : 'replace';
+}
+
+function niGetUserSubPromptField(state = niGetUserSubPromptState()) {
+    if (state === 'boundary') return 'userSubBoundaryPrompt';
+    if (state === 'play') return 'userSubPromptPlay';
+    return 'userSubPromptReplace';
+}
+
+function niGetUserSubCustomPrompt(state = niGetUserSubPromptState(), cfg = niGetUserSubConfig()) {
+    const field = niGetUserSubPromptField(state);
+    return typeof cfg[field] === 'string' ? cfg[field] : null;
+}
+
+function niSaveUserSubPromptFromUI() {
+    const ta = q('#ni-user-sub-prompt-preview');
+    if (!ta) return;
+    const cfg = niGetUserSubConfig();
+    cfg[niGetUserSubPromptField(niGetUserSubPromptState(cfg))] = ta.value ?? '';
+    saveSettingsDebounced();
+}
+
+function niBuildDefaultUserSubIdentityPrompt() {
     const cfg = niGetUserSubConfig();
     if (!cfg.userSubEnabled) return '';
 
@@ -5457,12 +5550,28 @@ function niBuildUserSubIdentityPrompt() {
     return `[用户代入角色]\n<user>代表原著角色「${displayName}」。以下称呼只作为同一角色的映射：${names.join('、')}。后续正文使用<user>，不要把原名或称呼写成另一个角色。\n[/用户代入角色]`;
 }
 
+function niBuildUserSubIdentityPrompt() {
+    const cfg = niGetUserSubConfig();
+    if (!cfg.userSubEnabled) return '';
+    const customPrompt = niGetUserSubCustomPrompt(niGetUserSubPromptState(cfg), cfg);
+    if (customPrompt !== null) return customPrompt;
+    return niBuildDefaultUserSubIdentityPrompt();
+}
+
 function niGetUserSubPromptPreview() {
     const cfg = niGetUserSubConfig();
     if (!cfg.userSubEnabled) {
         return {
             state: '关闭边界',
             text: niBuildUserRoleBoundaryPrompt(),
+        };
+    }
+    const state = niGetUserSubPromptState(cfg);
+    const customPrompt = niGetUserSubCustomPrompt(state, cfg);
+    if (customPrompt !== null) {
+        return {
+            state: niIsUserSubPlayMode(cfg) ? '扮演模式' : '替换模式',
+            text: customPrompt,
         };
     }
     const prompt = niBuildUserSubIdentityPrompt();
@@ -5490,7 +5599,8 @@ function niSyncUserSubPromptPreview() {
 function niBuildUserRoleBoundaryPrompt() {
     const cfg = niGetUserSubConfig();
     if (cfg.userSubEnabled) return '';
-    return `[关于用户角色]\n当前未启用“用户代入角色”映射：<user>不默认等同于原著主角或任何原著角色；原著主角/配角默认作为故事中的NPC处理。\n不要把原著角色经历、剧情事件、身份关系、称呼归属、原作行动或原著角色曾经做出的选择自动映射到 <user>。\n若当前对话、角色卡或其他设置明确声明 <user> 正在代入某个角色，则以该明确声明为准。\n[/关于用户角色]`;
+    const customPrompt = niGetUserSubCustomPrompt('boundary', cfg);
+    return customPrompt !== null ? customPrompt : USER_SUB_BOUNDARY_PROMPT;
 }
 
 function niReplaceOutsideAngleTags(text, pattern, replacement) {
@@ -6061,9 +6171,7 @@ function niApplyCharAiProfile(i, profile) {
 
     const detailEl = q(`#ni-cbio-${i}`);
     if (detailEl) {
-        const rawEyeOn2 = c2.showRaw !== false;
-        const detailInner2 = niRenderRawDetail(c2, i);
-        detailEl.innerHTML = rawEyeOn2 ? (detailInner2 || '<span style="opacity:.5">暂无人设</span>') : '（原始人设已关闭注入）';
+        detailEl.innerHTML = niRenderRawDetail(c2, i);
     }
 
     let aipEl = q(`#ni-caip-${i}`);
@@ -6381,9 +6489,7 @@ function getNodesForStage(idx) {
         });
         const subResult = subArr.filter((p, i) => {
             let mapped = p.stageIdx;
-            if (mapped == null && p._chunkIdx != null) {
-                mapped = S.stageMap[p._chunkIdx] ?? S.stageMap[String(p._chunkIdx)];
-            }
+            if (mapped == null) mapped = niResolveSubPlotStageIdx(p);
             return mapped === idx && keep('sub', p, i);
         });
         return {
@@ -7002,18 +7108,32 @@ async function embedText(text) {
 // ============================================================
 // 消息内容提取（支持标签过滤）
 // ============================================================
-function extractMesText(mes, tag) {
-    if (!tag) return mes || '';
-    // 提取所有 <tag>...</tag> 块，全部拼接（跨行匹配）
-    const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'gi');
+function niExtractTagBlocks(text, tag) {
+    const name = String(tag || '').trim();
+    if (!/^[\w:-]+$/.test(name)) return [];
+    const re = new RegExp(`<${name}\\b[^>]*>([\\s\\S]*?)<\\/${name}>`, 'gi');
     const matches = [];
     let m;
-    while ((m = re.exec(mes)) !== null) {
+    while ((m = re.exec(String(text || ''))) !== null) {
         const inner = m[1].trim();
         if (inner) matches.push(inner);
     }
-    // 有匹配就返回拼接结果，无匹配（标签不存在）则回退到完整消息
-    return matches.length ? matches.join('\n') : (mes || '');
+    return matches;
+}
+
+function extractMesText(mes, tag) {
+    const raw = String(mes || '');
+    const tags = String(tag || '')
+        .split(',')
+        .map(t => t.trim())
+        .filter(Boolean);
+    if (!tags.length) return raw;
+
+    const extracted = [];
+    tags.forEach(t => extracted.push(...niExtractTagBlocks(raw, t)));
+
+    const unique = [...new Set(extracted.map(t => t.trim()).filter(Boolean))];
+    return unique.length ? unique.join('\n') : raw;
 }
 
 // ============================================================
@@ -7362,22 +7482,32 @@ function niGetCurrentChatMessages() {
         const ctx = getContext();
         if (Array.isArray(ctx?.chat)) {
             const renderedById = new Map();
-            const renderedByIndex = [];
-            niGetRenderedChatMessages().forEach((m, i) => {
+            const renderedVisibleByIndex = [];
+            niGetRenderedChatMessages().forEach((m) => {
                 if (Number.isFinite(m.mes_id)) renderedById.set(m.mes_id, m);
-                renderedByIndex[i] = m;
+                if (niDevIsCountableMessage(m)) renderedVisibleByIndex.push(m);
             });
+            let visibleIdx = 0;
             return ctx.chat
                 .map((m, i) => {
+                    const role = String(m?.role || '').toLowerCase();
+                    if (m?.is_system || role === 'system') return m;
                     const id = Number(m?.mes_id ?? m?.id ?? i);
-                    const rendered = renderedById.get(id) || renderedByIndex[i];
+                    const fallbackRendered = renderedVisibleByIndex[visibleIdx++];
+                    const rendered = renderedById.get(id) || fallbackRendered;
                     const renderedText = String(rendered?.mes || '').trim();
                     return renderedText ? { ...m, mes: renderedText } : m;
                 })
-                .filter(m => niDevMessageText(m));
+                .filter(m => niDevIsCountableMessage(m));
         }
     } catch (_) {}
-    return niGetRenderedChatMessages();
+    return niGetRenderedChatMessages().filter(m => niDevIsCountableMessage(m));
+}
+
+function niDevIsCountableMessage(m) {
+    const role = String(m?.role || '').toLowerCase();
+    if (m?.is_system || role === 'system') return false;
+    return !!niDevMessageText(m);
 }
 
 function niDevMessageText(m) {
@@ -7545,14 +7675,14 @@ function niBuildDeviationPrompt(promptTemplate, reference, recentMsgs, existingD
 
     // 兼容用户保存过旧版/自定义提示词：没有占位符时仍注入旧偏差档案。
     if (existingText && !hasExistingSlot) {
-        prompt += `\n\n【已有偏差档案】\n以下是此前已经保存的当前偏差档案，代表当前分支现实中已经成立且仍需遵守的事实。已改变事实只追加新锚点；当前偏差约束和仍保留的原著事实由本次结果完整替换。\n<existing_deviation>\n${existingBlock.slice(0, 3000)}\n</existing_deviation>`;
+        prompt += `\n\n【已有偏差档案】\n以下是此前已经保存的当前偏差档案，代表当前分支现实中已经成立且仍需遵守的事实。已改变事实只追加长期锚点；当前偏差约束和仍保留的原著事实由本次结果完整替换。\n<existing_deviation>\n${existingBlock.slice(0, 3000)}\n</existing_deviation>`;
     }
     const modeLine = mode === 'retry'
-        ? '这是对上一次偏差范围的重试。请重新生成 JSON：changed_facts 只写本范围仍成立且需要追加的新锚点；current_deviation_constraint 与 preserved_facts 输出更新后的完整内容。'
+        ? '这是对上一次偏差范围的重试。请重新生成 JSON：changed_facts 只写本范围仍成立且需要追加的长期锚点；current_deviation_constraint 与 preserved_facts 输出更新后的完整内容。'
         : (existingText
-            ? '这是在已有当前偏差基础上的更新。请只在 changed_facts 中输出本次范围新增或修正后必须追加的事实锚点；current_deviation_constraint 与 preserved_facts 输出更新后的完整内容。'
+            ? '这是在已有当前偏差基础上的更新。请只在 changed_facts 中输出本次范围新增或修正后必须追加的长期事实锚点；current_deviation_constraint 与 preserved_facts 输出更新后的完整内容。'
             : '这是首次偏差分析。请输出本次范围内已经成立的偏差档案。');
-    prompt += `\n\n【本次分析范围】\n${rangeLabel}（共 ${rangeCtx.count || 0} 楼）\n\n【本次运行强制要求】\n${modeLine}\nchanged_facts 不要重复搬运已有锚点；current_deviation_constraint 必须完整替换当前偏差约束并包含主要偏差的执行含义；preserved_facts 必须完整替换仍保留的原著事实，只保留尚未发生、仍适用、不会误导后续写作的原著逻辑。若本次范围没有新增重大偏差，JSON 数组可以为空，summary 简述“本范围未发现新增重大偏差”。不要把当前正文已经采纳并影响剧情的内容写成“用户/读者/玩家”的单方面认定；如果剧情本身是在描写信息差、隐瞒、误导或角色误判，请记录为剧内认知状态，而不是改写成全知事实。`;
+    prompt += `\n\n【本次分析范围】\n${rangeLabel}（共 ${rangeCtx.count || 0} 楼）\n\n【本次运行强制要求】\n${modeLine}\nchanged_facts 不要重复搬运已有锚点，只记录死亡、身份暴露、关系断裂、阵营改变、能力变化、已完成关键行动等长期有效事实；<user> 或角色的当前所在地、同行者、临时目标、正在执行的动作、短期情绪与暂时处境必须写入 current_deviation_constraint，并在新状态出现时以新状态完整替换旧状态。current_deviation_constraint 必须完整替换当前偏差约束并包含主要偏差的执行含义；preserved_facts 必须完整替换仍保留的原著事实，只保留尚未发生、仍适用、不会误导后续写作的原著逻辑。若本次范围没有新增重大偏差，JSON 数组可以为空，summary 简述“本范围未发现新增重大偏差”。不要把当前正文已经采纳并影响剧情的内容写成“用户/读者/玩家”的单方面认定；如果剧情本身是在描写信息差、隐瞒、误导或角色误判，请记录为剧内认知状态，而不是改写成全知事实。`;
 
     if (referenceBlock && !hasReferenceSlot) {
         prompt += `\n\n【原著参考内容】\n<reference>\n${referenceBlock.slice(0, 3000)}\n</reference>`;
@@ -8133,9 +8263,12 @@ async function onPromptReady(eventData) {
     // ① 向量块注入（已向量阶段 → 语义召回）
     if (vecStages.length) {
         // 穿书模式下，取当前节点的时间/地点作为语义锚点
-        const curTbNode = (extension_settings[EXT_NAME]?.transBookMode)
-            ? (niGetTbNodes()[S.tbCurIdx] || null)
-            : null;
+        let curTbNode = null;
+        if (extension_settings[EXT_NAME]?.transBookMode) {
+            const tbNodes = niGetTbNodes();
+            niTbReconcileCurrentNode(tbNodes);
+            curTbNode = tbNodes[S.tbCurIdx] || null;
+        }
         const lightRecallContext = (extension_settings[EXT_NAME]?.transBookMode && extension_settings[EXT_NAME]?.tbLightRecallMode)
             ? niBuildTbLightRecallContext(curTbNode)
             : null;
@@ -8184,8 +8317,10 @@ async function onPromptReady(eventData) {
             const tbNodes = niGetTbNodes();
             const stageHasUndone = {};
             tbNodes.forEach(nd => { if (!nd.done) stageHasUndone[nd.stageIdx] = true; });
+            const frontierStageIdx = niTbFrontierStage();
             for (let si = 1; si <= S.stageMapN; si++) {
-                for (let prev = 1; prev < si; prev++) {
+                if (si <= frontierStageIdx) continue;
+                for (let prev = frontierStageIdx; prev < si; prev++) {
                     if (stageHasUndone[prev]) { tbLockedStages.add(si); break; }
                 }
             }
@@ -9732,6 +9867,9 @@ jQuery(async () => {
         niTogglePanel('ni-user-sub-pb', 'ni-user-sub-prompt-btn');
         niSyncUserSubPromptPreview();
     });
+    $app.on('input change', '#ni-user-sub-prompt-preview', () => {
+        niSaveUserSubPromptFromUI();
+    });
     $app.on('change', '#ni-user-sub-chk', function() {
         extension_settings[EXT_NAME].userSubEnabled = this.checked;
         niSaveUserSubFromUI({ rerender: true });
@@ -10920,22 +11058,8 @@ function niConfirmStageMap() {
             plot.stageLabel = `第 ${mapped} 阶段`;
         }
     });
-    // sub 节点跟随 main，用 _chunkIdx 匹配
-    const subArr = S.plots.sub || [];
-    subArr.forEach(plot => {
-        const ci = plot._chunkIdx;
-        if (ci == null) return;
-        // 优先用 _chunkIdx 直接查（新增映射），再 fallback 到 main 数组下标
-        let mapped = newMap[ci] ?? newMap[String(ci)];
-        if (mapped === undefined) {
-            const mainIdx = mainArr.findIndex(p => p._chunkIdx === ci);
-            if (mainIdx !== -1) mapped = newMap[mainIdx] ?? newMap[String(mainIdx)];
-        }
-        if (mapped !== undefined) {
-            plot.stageIdx = mapped;
-            plot.stageLabel = `第 ${mapped} 阶段`;
-        }
-    });
+    // sub 节点优先跟随 branch_links 关联的主线/转折；无关联时再按同正文块邻近节点推断。
+    niSyncSubPlotStageAssignments();
 
     // 更新阶段标题
     slots.sort((a,b) => parseInt(a[0]) - parseInt(b[0])).forEach(([, slot], i) => {
@@ -11214,11 +11338,6 @@ const TB_DEFAULT_ONGOING_PROMPT =
 不得用未铺垫的新变量压低、替换或无效化 <user> 已建立的身份、关系、资源、承诺与主动权。
 [/穿书模式·进行中]`;
 
-const TB_DEFAULT_QUERY_PROMPT =
-`▌每次回复末尾必须附加一行，格式严格如下，不得省略：
-<ni_query>人物: xx | 地点: xx | 事件: xx</ni_query>
-（xx 替换为本次回复中实际涉及的人物、地点、事件关键词，供语义检索使用，用户不可见）`;
-
 const TB_DEFAULT_IMMERSION_PROMPT =
 `[穿书模式·沉浸边界]
 
@@ -11384,8 +11503,10 @@ const TB_DEFAULT_OPENING_PROMPT =
 // ── 运行时状态 ───────────────────────────────────────────────
 
 S.tbNodeDone   = {};   // {[nodeId]: boolean}  — 节点完成状态（从 chat[0] 读写）
-S.tbPaused     = false; // 暂停推进（内存态，不持久化）
+S.tbPaused     = false; // 暂停推进（保存到当前聊天首条消息 ni_tb.paused）
 S.tbCurIdx     = 0;    // 当前轮播中心节点下标（在 niGetTbNodes() 返回数组中的下标）
+S.tbCurNodeId  = '';   // 当前节点稳定 id，避免刷新后因列表重排导致索引漂移
+S.tbFrontierStageIdx = 1; // 用户已经手动推进到的最远阶段，用于跳过旧阶段剩余节点的锁定
 S.tbInferring  = false; // 推演中
 S.tbSectionOpen = { done: false, active: true, todo: false };
 
@@ -11409,6 +11530,7 @@ window.niTbSyncPauseUI = niTbSyncPauseUI;
 function niTbSetPaused(paused) {
     S.tbPaused = !!paused;
     niTbSyncPauseUI();
+    niTbSaveState().catch(e => console.warn('[NI-TB] 保存暂停状态失败:', e));
 }
 window.niTbSetPaused = niTbSetPaused;
 
@@ -11424,8 +11546,6 @@ DEFAULT_SETTINGS.tbAdvancePrompt  = TB_DEFAULT_ADVANCE_PROMPT;
 DEFAULT_SETTINGS.tbInferPrompt    = TB_DEFAULT_INFER_PROMPT;
 DEFAULT_SETTINGS.tbOpeningPrompt  = TB_DEFAULT_OPENING_PROMPT;
 DEFAULT_SETTINGS.tbOngoingPrompt  = TB_DEFAULT_ONGOING_PROMPT;
-DEFAULT_SETTINGS.tbQueryMode      = false;
-DEFAULT_SETTINGS.tbQueryPrompt    = TB_DEFAULT_QUERY_PROMPT;
 DEFAULT_SETTINGS.tbLightRecallMode = false;
 DEFAULT_SETTINGS.tbImmersionMode  = false;
 DEFAULT_SETTINGS.tbImmersionPrompt = TB_DEFAULT_IMMERSION_PROMPT;
@@ -11482,6 +11602,17 @@ function niTbGetImmersionAppend(cfg) {
     return prompt ? `\n${prompt}` : '';
 }
 
+function niTbFrontierStage() {
+    return Math.max(1, parseInt(S.tbFrontierStageIdx, 10) || 1);
+}
+
+function niTbAdvanceFrontier(stageIdx) {
+    const si = parseInt(stageIdx, 10);
+    if (!Number.isFinite(si) || si <= 0) return niTbFrontierStage();
+    S.tbFrontierStageIdx = Math.max(niTbFrontierStage(), si);
+    return S.tbFrontierStageIdx;
+}
+
 // ── 数据桥接 ─────────────────────────────────────────────────
 
 /**
@@ -11523,9 +11654,11 @@ function niGetTbNodes() {
     allNodes.forEach(n => {
         if (!n.done) stageHasUndone[n.stageIdx] = true;
     });
+    const frontierStageIdx = niTbFrontierStage();
     allNodes.forEach(n => {
-        // 检查编号小于 n.stageIdx 的阶段中是否有未完成
-        for (let si = 1; si < n.stageIdx; si++) {
+        if (!Number.isFinite(Number(n.stageIdx)) || n.stageIdx <= frontierStageIdx) return;
+        // 检查前沿之后、编号小于 n.stageIdx 的阶段中是否有未完成
+        for (let si = frontierStageIdx; si < n.stageIdx; si++) {
             if (stageHasUndone[si]) { n.locked = true; break; }
         }
     });
@@ -11551,6 +11684,39 @@ function niGetTbStages() {
     return stages;
 }
 
+function niTbReconcileCurrentNode(nodes = niGetTbNodes()) {
+    if (!nodes.length) {
+        S.tbCurIdx = 0;
+        S.tbCurNodeId = '';
+        return;
+    }
+    let idx = -1;
+    if (S.tbCurNodeId) {
+        idx = nodes.findIndex(n => n.id === S.tbCurNodeId || n.legacyId === S.tbCurNodeId);
+    }
+    if (idx < 0 && Number.isFinite(Number(S.tbCurIdx))) {
+        idx = Math.max(0, Math.min(nodes.length - 1, Number(S.tbCurIdx)));
+    }
+    S.tbCurIdx = idx >= 0 ? idx : 0;
+    S.tbCurNodeId = nodes[S.tbCurIdx]?.id || '';
+    niTbAdvanceFrontier(nodes[S.tbCurIdx]?.stageIdx);
+}
+
+function niTbSetCurrentIdx(idx, nodes = niGetTbNodes(), { persist = false } = {}) {
+    if (!nodes.length) {
+        S.tbCurIdx = 0;
+        S.tbCurNodeId = '';
+    } else {
+        const nextIdx = Math.max(0, Math.min(nodes.length - 1, Number(idx) || 0));
+        S.tbCurIdx = nextIdx;
+        S.tbCurNodeId = nodes[nextIdx]?.id || '';
+        niTbAdvanceFrontier(nodes[nextIdx]?.stageIdx);
+    }
+    if (persist) niTbSaveState().catch(e => console.warn('[NI-TB] 保存当前节点失败:', e));
+    return S.tbCurIdx;
+}
+window.niTbSetCurrentIdx = niTbSetCurrentIdx;
+
 function niTbStageView(nodes, curIdx) {
     const curNode = nodes[curIdx] || nodes[0];
     if (!curNode) return { nodes: [], curIdx: 0, stageIdx: null };
@@ -11568,9 +11734,14 @@ async function niTbSaveState() {
     try {
         const ctx = getContext();
         if (!ctx?.chat?.[0]) return;
+        const nodes = niGetTbNodes();
+        if (nodes.length) niTbReconcileCurrentNode(nodes);
         ctx.chat[0].ni_tb = ctx.chat[0].ni_tb || {};
         ctx.chat[0].ni_tb.nodeDone = { ...S.tbNodeDone };
         ctx.chat[0].ni_tb.curIdx   = S.tbCurIdx;
+        ctx.chat[0].ni_tb.curNodeId = S.tbCurNodeId || nodes[S.tbCurIdx]?.id || '';
+        ctx.chat[0].ni_tb.frontierStageIdx = niTbFrontierStage();
+        ctx.chat[0].ni_tb.paused   = !!S.tbPaused;
         await ctx.saveChat();
     } catch (e) {
         console.warn('[NI-TB] saveState 失败:', e);
@@ -11583,9 +11754,15 @@ function niTbLoadState() {
         const saved = ctx?.chat?.[0]?.ni_tb;
         S.tbNodeDone = saved?.nodeDone ? { ...saved.nodeDone } : {};
         S.tbCurIdx   = saved?.curIdx   ?? 0;
+        S.tbCurNodeId = saved?.curNodeId || '';
+        S.tbFrontierStageIdx = Math.max(1, parseInt(saved?.frontierStageIdx, 10) || 1);
+        S.tbPaused   = !!saved?.paused;
     } catch (e) {
         S.tbNodeDone = {};
         S.tbCurIdx   = 0;
+        S.tbCurNodeId = '';
+        S.tbFrontierStageIdx = 1;
+        S.tbPaused   = false;
     }
 }
 
@@ -11597,8 +11774,8 @@ function niGetTbStoryBarHtml() {
     const stages = niGetTbStages();
     if (!nodes.length) return '';
 
-    // 钳制 curIdx
-    if (S.tbCurIdx >= nodes.length) S.tbCurIdx = 0;
+    // 用稳定节点 id 恢复当前节点，再钳制 curIdx
+    niTbReconcileCurrentNode(nodes);
     const curNode = nodes[S.tbCurIdx] || nodes[0];
     const curStage = stages.find(s => s.stageIdx === curNode.stageIdx) || stages[0];
     const stageView = niTbStageView(nodes, S.tbCurIdx);
@@ -11748,6 +11925,12 @@ function niTbCalcPos(slots, W) {
 function niTbCardHTML(node, idx, displayIdx = idx) {
     const typeCls = node.type;
     const descText = node.locked ? '（待解锁）' : (node.body || '（暂无描述）');
+    const metaParts = [node.time, node.location]
+        .map(v => String(v || '').trim())
+        .filter(Boolean);
+    const metaHtml = metaParts.length
+        ? `<span class="ni-tb-sc-num-meta">${niEsc(metaParts.join(' · '))}</span>`
+        : '';
 
     // 事件列表 (sub_notes)
     const subNotes = (!node.locked && Array.isArray(node.sub_notes) && node.sub_notes.length)
@@ -11770,7 +11953,7 @@ function niTbCardHTML(node, idx, displayIdx = idx) {
           ).join('')}</div>`
         : '';
 
-    return `<div class="ni-tb-sc-num">节点 ${displayIdx + 1}</div>
+    return `<div class="ni-tb-sc-num">节点 ${displayIdx + 1}${metaHtml}</div>
 <span class="ni-tb-sc-type ${typeCls}">${niEsc(node.typeLabel)}</span>
 <div class="ni-tb-sc-check${node.done ? ' checked' : ''}" id="ni-tb-chk${idx}"><i class="ti ti-check"></i></div>
 <div class="ni-tb-sc-title">${niEsc(node.title)}</div>
@@ -11880,7 +12063,7 @@ function niTbAnimateTo(newCur, nodes) {
 
 function niTbCardClick(e, idx, nodes) {
     if (idx !== S.tbCurIdx) {
-        S.tbCurIdx = idx;
+        niTbSetCurrentIdx(idx, nodes, { persist: true });
         niTbAnimateTo(idx, nodes);
         niTbSyncMeta(nodes);
         niTbRefreshNodePanel(nodes);
@@ -12054,6 +12237,7 @@ async function niTbGenerateInfer() {
         const cfg   = extension_settings[EXT_NAME];
         const nodes = niGetTbNodes();
         const ctx   = getContext();
+        niTbReconcileCurrentNode(nodes);
 
         // 当前节点（取当前轮播中心节点）
         const curNode = nodes[S.tbCurIdx] || nodes[0] || { title: '（未知）', body: '' };
@@ -12234,10 +12418,10 @@ function niTbInjectCSS() {
 .ni-tb-unarchive-hint{font-size:9px;color:rgba(192,90,98,.65);opacity:0;transition:opacity .2s;pointer-events:none}
 .ni-tb-scard-overlay:hover .ni-tb-done-badge{opacity:.5}
 .ni-tb-scard-overlay:hover .ni-tb-unarchive-hint{opacity:1}
-ni_query{display:none!important}
 .ni-tb-scard:not(.active) .ni-tb-sc-check{pointer-events:none;opacity:0}
 .ni-tb-scard:not(.active) .ni-tb-scard-overlay:hover{background:rgba(248,235,237,.72)}
-.ni-tb-sc-num{font-size:10px;color:var(--color-text-tertiary,#9a9aaa);margin-bottom:3px}
+.ni-tb-sc-num{font-size:10px;color:var(--color-text-tertiary,#9a9aaa);margin-bottom:3px;display:flex;align-items:center;gap:4px;min-width:0;padding-right:28px;white-space:nowrap}
+.ni-tb-sc-num-meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;color:var(--color-text-secondary,#5a5a6a)}
 .ni-tb-sc-type{display:inline-block;font-size:9px;font-weight:500;padding:1px 6px;border-radius:10px;margin-bottom:8px}
 .ni-tb-sc-type.main{background:var(--ni-primary-soft, #F5E6EC);color:var(--ni-primary-soft-text, #8B3A50)}
 .ni-tb-sc-type.sub{background:var(--ni-success-soft, #E1F5EE);color:var(--ni-success-text, #0F6E56)}
@@ -12411,7 +12595,7 @@ function niTbBindBarEvents() {
         const nodes = niGetTbNodes();
         const firstIdx = nodes.findIndex(n => n.stageIdx === si);
         if (firstIdx >= 0) {
-            S.tbCurIdx = firstIdx;
+            niTbSetCurrentIdx(firstIdx, nodes, { persist: true });
             niTbAnimateTo(firstIdx, nodes);
             niTbSyncMeta(nodes);
             niTbRefreshNodePanel(nodes);
@@ -12443,7 +12627,7 @@ function niTbBindNodePanelEvents() {
             const ni    = parseInt(row.dataset.ni);
             const nodes = niGetTbNodes();
             if (isNaN(ni) || ni < 0 || ni >= nodes.length) return;
-            S.tbCurIdx = ni;
+            niTbSetCurrentIdx(ni, nodes, { persist: true });
             niTbAnimateTo(ni, nodes);
             niTbSyncMeta(nodes);
             niTbRefreshNodePanel(nodes);
@@ -12581,21 +12765,6 @@ function niTbInitSettingsUI() {
             saveSettingsDebounced();
         });
 
-        // 归纳提示词
-        const queryEl = document.getElementById('ni-tb-query-prompt');
-        if (queryEl) {
-            queryEl.addEventListener('input', function () {
-                extension_settings[EXT_NAME].tbQueryPrompt = this.value;
-                saveSettingsDebounced();
-            });
-        }
-        document.getElementById('ni-tb-query-reset')?.addEventListener('click', () => {
-            const _queryEl = document.getElementById('ni-tb-query-prompt');
-            if (_queryEl) _queryEl.value = TB_DEFAULT_QUERY_PROMPT;
-            extension_settings[EXT_NAME].tbQueryPrompt = TB_DEFAULT_QUERY_PROMPT;
-            saveSettingsDebounced();
-        });
-
         // 沉浸提示词
         const immersionEl = document.getElementById('ni-tb-immersion-prompt');
         if (immersionEl) {
@@ -12608,24 +12777,6 @@ function niTbInitSettingsUI() {
             const _immersionEl = document.getElementById('ni-tb-immersion-prompt');
             if (_immersionEl) _immersionEl.value = TB_DEFAULT_IMMERSION_PROMPT;
             extension_settings[EXT_NAME].tbImmersionPrompt = TB_DEFAULT_IMMERSION_PROMPT;
-            saveSettingsDebounced();
-        });
-
-        document.getElementById('ni-tb-query-mode')?.addEventListener('change', function () {
-            extension_settings[EXT_NAME].tbQueryMode = this.checked;
-            // 同步 vecMsgTag
-            const _tagEl = document.getElementById('ni-vec-msg-tag');
-            if (_tagEl) {
-                const _tags = _tagEl.value.split(',').map(t => t.trim()).filter(Boolean);
-                if (this.checked) {
-                    if (!_tags.includes('ni_query')) _tags.push('ni_query');
-                } else {
-                    const _idx = _tags.indexOf('ni_query');
-                    if (_idx !== -1) _tags.splice(_idx, 1);
-                }
-                _tagEl.value = _tags.join(', ');
-                extension_settings[EXT_NAME].vecMsgTag = _tagEl.value;
-            }
             saveSettingsDebounced();
         });
 
@@ -12651,8 +12802,6 @@ function niTbInitSettingsUI() {
     if (inferElSync) inferElSync.value = cfg?.tbInferPrompt || TB_DEFAULT_INFER_PROMPT;
     const ongoingElSync = document.getElementById('ni-tb-ongoing-prompt');
     if (ongoingElSync) ongoingElSync.value = cfg?.tbOngoingPrompt || TB_DEFAULT_ONGOING_PROMPT;
-    const queryElSync = document.getElementById('ni-tb-query-prompt');
-    if (queryElSync) queryElSync.value = cfg?.tbQueryPrompt || TB_DEFAULT_QUERY_PROMPT;
     const lightRecallModeChk = document.getElementById('ni-tb-light-recall-mode');
     if (lightRecallModeChk) lightRecallModeChk.checked = !!cfg?.tbLightRecallMode;
     const immersionElSync = document.getElementById('ni-tb-immersion-prompt');
@@ -12680,24 +12829,9 @@ window.niSaveSettings = function () {
     cfg.tbOngoingPrompt  = document.getElementById('ni-tb-ongoing-prompt')?.value || cfg.tbOngoingPrompt;
     cfg.tbDisplayStatusbar = document.getElementById('ni-tb-display-statusbar')?.checked ?? cfg.tbDisplayStatusbar;
     cfg.tbDisplayPopup     = document.getElementById('ni-tb-display-popup')?.checked     ?? cfg.tbDisplayPopup;
-    cfg.tbQueryMode        = document.getElementById('ni-tb-query-mode')?.checked ?? cfg.tbQueryMode;
-    cfg.tbQueryPrompt      = document.getElementById('ni-tb-query-prompt')?.value  || cfg.tbQueryPrompt;
     cfg.tbLightRecallMode  = document.getElementById('ni-tb-light-recall-mode')?.checked ?? cfg.tbLightRecallMode;
     cfg.tbImmersionMode    = document.getElementById('ni-tb-immersion-mode')?.checked ?? cfg.tbImmersionMode;
     cfg.tbImmersionPrompt  = document.getElementById('ni-tb-immersion-prompt')?.value || cfg.tbImmersionPrompt || TB_DEFAULT_IMMERSION_PROMPT;
-    // 开关开启时自动将 ni_query 追加到 vecMsgTag，关闭时移除
-    const _tagEl = document.getElementById('ni-vec-msg-tag');
-    if (_tagEl) {
-        const _tags = _tagEl.value.split(',').map(t => t.trim()).filter(Boolean);
-        if (cfg.tbQueryMode) {
-            if (!_tags.includes('ni_query')) _tags.push('ni_query');
-        } else {
-            const _idx = _tags.indexOf('ni_query');
-            if (_idx !== -1) _tags.splice(_idx, 1);
-        }
-        _tagEl.value = _tags.join(', ');
-        extension_settings[EXT_NAME].vecMsgTag = _tagEl.value;
-    }
 };
 
 // syncSettingsToUI 补丁：切换到设置页时将穿书字段同步到 UI
@@ -12717,10 +12851,6 @@ const _niSyncSettingsToUIPatched = function () {
     if (statusbarChkSync) statusbarChkSync.checked = !!cfg.tbDisplayStatusbar;
     const popupChkSync = document.getElementById('ni-tb-display-popup');
     if (popupChkSync) popupChkSync.checked = !!cfg.tbDisplayPopup;
-    const queryModeChk = document.getElementById('ni-tb-query-mode');
-    if (queryModeChk) queryModeChk.checked = !!cfg.tbQueryMode;
-    const queryPromptEl = document.getElementById('ni-tb-query-prompt');
-    if (queryPromptEl) queryPromptEl.value = cfg.tbQueryPrompt || TB_DEFAULT_QUERY_PROMPT;
     const lightRecallModeChkSync = document.getElementById('ni-tb-light-recall-mode');
     if (lightRecallModeChkSync) lightRecallModeChkSync.checked = !!cfg.tbLightRecallMode;
     const immersionModeChkSync = document.getElementById('ni-tb-immersion-mode');
@@ -12767,14 +12897,14 @@ jQuery(document).ready(function () {
             // 若没有待推进提示词，检查是否处于"第一节点未完成"状态 → 注入开场提示词
             if (!_tbPendingAdvancePrompt) {
                 const nodes = niGetTbNodes();
+                niTbReconcileCurrentNode(nodes);
                 if (nodes.length > 0 && !nodes[0].done) {
                     niTbWriteOpeningPrompt();
                 }
             }
 
             if (_tbPendingAdvancePrompt) {
-                const _queryAppend = cfg.tbQueryMode ? '\n' + (cfg.tbQueryPrompt || TB_DEFAULT_QUERY_PROMPT) : '';
-                const content = _tbPendingAdvancePrompt + niTbGetImmersionAppend(cfg) + _queryAppend;
+                const content = _tbPendingAdvancePrompt + niTbGetImmersionAppend(cfg);
                 _tbPendingAdvancePrompt = '';
                 _inject(`${EXT_NAME}_tb_advance`, content);
                 // 一次性提示词发出后，本次不再叠加持续提示词，避免重复
@@ -12783,14 +12913,14 @@ jQuery(document).ready(function () {
 
             // ── 持续提示词：每条消息都注入 ───────────────────────
             const nodes = niGetTbNodes();
+            niTbReconcileCurrentNode(nodes);
             const curNode = nodes[S.tbCurIdx] || nodes[0];
             if (!curNode) return;
 
             const ongoingTpl = (cfg.tbOngoingPrompt || TB_DEFAULT_ONGOING_PROMPT).trim();
-            const _queryAppendOngoing = cfg.tbQueryMode ? '\n' + (cfg.tbQueryPrompt || TB_DEFAULT_QUERY_PROMPT) : '';
             const ongoingContent = ongoingTpl
                 .replace(/{B_TITLE}/g, curNode.title)
-                .replace(/{B_BODY}/g,  curNode.body || '（暂无描述）') + niTbGetImmersionAppend(cfg) + _queryAppendOngoing;
+                .replace(/{B_BODY}/g,  curNode.body || '（暂无描述）') + niTbGetImmersionAppend(cfg);
             _inject(`${EXT_NAME}_tb_ongoing`, ongoingContent);
         });
     }
@@ -12813,12 +12943,11 @@ jQuery(document).ready(function () {
     // 切换对话：重置状态，重新加载
     eventSource.on(event_types.CHAT_CHANGED, () => {
         document.getElementById('ni-storybar')?.remove();
-        S.tbPaused  = false;
-        niTbSyncPauseUI();
         _tbPendingAdvancePrompt = '';
         _tbAdvanceSent.clear();
         S.tbSectionOpen = { done: false, active: true, todo: false };
         niTbLoadState();
+        niTbSyncPauseUI();
         niRenderUserSubUI();
         niSyncRoleplayToDepth();
         // 短暂延迟等对话 DOM 就绪
@@ -12929,7 +13058,10 @@ console.log('[NI-TB] 穿书模式模块已加载');
                 e.stopPropagation();
                 const { nodes } = niPopGetState();
                 const firstIdx = nodes.findIndex(n => n.stageIdx === s.stageIdx);
-                if (firstIdx >= 0) _popCurIdx = firstIdx;
+                if (firstIdx >= 0) {
+                    if (typeof window.niTbSetCurrentIdx === 'function') window.niTbSetCurrentIdx(firstIdx, nodes, { persist: true });
+                    _popCurIdx = firstIdx;
+                }
                 _popStageOpen = false;
                 drop.classList.remove('vis');
                 const arrow = q('ni-pop-stage-arrow')?.querySelector('span');
@@ -12993,7 +13125,11 @@ console.log('[NI-TB] 穿书模式模块已加载');
                     }
                     return;
                 }
-                if (gi !== _popCurIdx) { _popCurIdx = gi; niPopRender(); }
+                if (gi !== _popCurIdx) {
+                    if (typeof window.niTbSetCurrentIdx === 'function') window.niTbSetCurrentIdx(gi, nodes, { persist: true });
+                    _popCurIdx = gi;
+                    niPopRender();
+                }
             });
 
             g.appendChild(row);
@@ -13130,6 +13266,7 @@ console.log('[NI-TB] 穿书模式模块已加载');
         const oldDesc = oldGroup?.querySelector('.ni-node-desc');
         if (oldDesc)  { oldDesc.classList.remove('vis'); }
         // 应用新高亮
+        if (typeof window.niTbSetCurrentIdx === 'function') window.niTbSetCurrentIdx(newIdx, nodes, { persist: true });
         _popCurIdx = newIdx;
         const newRow   = q('ni-pop-nr' + newIdx);
         const newGroup = newRow?.parentElement;
