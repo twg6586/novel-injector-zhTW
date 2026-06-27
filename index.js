@@ -1724,11 +1724,10 @@ const niCfgBoundInt = (sel, fallback, min = 0, max = 9999) => {
 };
 
 function niSyncDevAutoUI() {
-    const enabled = !!q('#ni-dev-auto-enabled')?.checked;
     const input = q('#ni-dev-auto-every');
     const row = input?.closest('.ni-dev-auto-row');
-    if (input) input.disabled = !enabled;
-    if (row) row.hidden = !enabled;
+    if (input) input.disabled = false;
+    if (row) row.hidden = false;
 }
 
 function niSyncDeviationResultUI({ collapsed = true, preserveBody = false } = {}) {
@@ -10227,7 +10226,22 @@ jQuery(async () => {
     $app.on('click', '#ni-dev-prompt-btn', () => {
         niTogglePanel('ni-dev-pb', 'ni-dev-prompt-btn');
     });
-    $app.on('input change', '#ni-dev-auto-enabled, #ni-dev-auto-every, #ni-dev-manual-msg-count', () => {
+    $app.on('change', '#ni-dev-auto-enabled', async () => {
+        niSyncDevAutoUI();
+        niSaveSettings();
+        niResetDevAutoCounter();
+        if (q('#ni-dev-auto-enabled')?.checked) {
+            const noteEl = q('#ni-dev-note');
+            if (noteEl) noteEl.textContent = '自动更新已开启，正在检查是否需要补跑偏差分析。';
+            const result = await niMaybeAutoRunDev({ forceStart: true }).catch(e => {
+                console.warn('[NI] 自动偏差分析启动失败:', e);
+                if (noteEl) noteEl.textContent = `自动更新启动失败: ${e.message || e}`;
+                return { ok: false, error: e };
+            });
+            if (!result && noteEl) noteEl.textContent = '自动更新已开启，达到间隔层数后会自动运行。';
+        }
+    });
+    $app.on('input change', '#ni-dev-auto-every, #ni-dev-manual-msg-count', () => {
         niSyncDevAutoUI();
         niSaveSettings();
         niResetDevAutoCounter();

@@ -3057,8 +3057,6 @@ select.ni-modal-input {
     width: 54px;
     text-align: center;
 }
-.ni-dev-auto-row[hidden] { display: none !important; }
-
 #ni-style-pb,
 #ni-dev-pb {
     display: none;
