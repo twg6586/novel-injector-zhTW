@@ -7784,6 +7784,14 @@ function niDevRangeLabel(range) {
     return r.startFloor === r.endFloor ? `第 ${r.startFloor} 楼` : `第 ${r.startFloor}-${r.endFloor} 楼`;
 }
 
+function niDevRangeProgressLabel(range, action = '更新') {
+    const r = niNormalizeDevRange(range);
+    if (!r) return `当前范围${action}中...`;
+    return r.startFloor === r.endFloor
+        ? `第 ${r.startFloor} 层${action}中...`
+        : `第 ${r.startFloor} 到 ${r.endFloor} 层${action}中...`;
+}
+
 function niBuildChatRangeContext(limit, range = null) {
     const messages = niMergeDevMessagesByFloor(
         niGetCurrentChatMessages(),
@@ -8003,9 +8011,7 @@ async function niRunDev(options = {}) {
     const devPanel = q('#ni-dev-panel');
     const noteEl = q('#ni-dev-note');
     if (devPanel) devPanel.style.display = 'none';
-    if (noteEl) noteEl.textContent = retry
-        ? '正在重试偏差分析...'
-        : (auto ? '正在自动更新偏差...' : '正在更新当前偏差...');
+    if (noteEl) noteEl.textContent = retry ? '正在重试偏差分析...' : '正在更新当前偏差...';
 
     try {
         const existingSections = niSetDeviationSections(niGetDeviationSections({ preferUI: true }));
@@ -8019,7 +8025,7 @@ async function niRunDev(options = {}) {
         }
         const chatCtx = niBuildChatRangeContext(recentLimit, retryRange);
         const recentMsgs = chatCtx.text;
-        if (noteEl && chatCtx.count) noteEl.textContent = `${retry ? '正在重试' : '正在分析'}${niDevRangeLabel(chatCtx)}...`;
+        if (noteEl && chatCtx.count) noteEl.textContent = niDevRangeProgressLabel(chatCtx, retry ? '重试' : '更新');
         if (!chatCtx.count || !recentMsgs.trim()) {
             if (noteEl) {
                 noteEl.textContent = retry
@@ -8088,7 +8094,7 @@ async function niRunDev(options = {}) {
             const val = Math.max(0, Math.min(100, json[f] || 0));
             animateBar(`ni-d${i}`, `ni-s${i}`, val);
         });
-        if (noteEl) noteEl.textContent = json.summary || `${niDevRangeLabel(chatCtx)}偏差已更新。`;
+        if (noteEl) noteEl.textContent = '';
         const nextSections = niBuildDeviationSectionsFromAnalysis(json);
         niSetDeviationSections(niMergeDeviationSections(existingSections, nextSections));
         niSetDevProgress(chatCtx);
@@ -8148,7 +8154,7 @@ function niNotifyDevAutoComplete(result) {
         : ranges.length === 1
         ? `前文偏差已自动更新完成（本次更新${ranges[0]}）。`
         : '前文偏差已自动更新完成。';
-    alert(msg);
+    toastr?.success(msg);
 }
 
 function niDevAutoSkipMessage(result) {
