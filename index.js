@@ -7631,18 +7631,40 @@ function niBuildDevChatEntriesText(entries, totalLimit = NI_DEV_CURRENT_TEXT_LIM
     return text.length > maxTotal ? niDevClipMiddle(text, maxTotal) : text;
 }
 
+function niDevMessageMesId(m) {
+    const candidates = [m?.mes_id, m?.mesId, m?.message_id, m?.messageId, m?.id];
+    for (const value of candidates) {
+        if (value === undefined || value === null || value === '') continue;
+        const n = Number(value);
+        if (Number.isFinite(n) && n >= 0) return Math.floor(n);
+    }
+    return null;
+}
+
+function niDevMessageFloor(m, fallbackIndex = null) {
+    const explicit = Number(m?._niFloor ?? m?.floor);
+    if (Number.isFinite(explicit) && explicit > 0) return Math.floor(explicit);
+    const mesId = niDevMessageMesId(m);
+    if (mesId != null) return mesId + 1;
+    const idx = Number(fallbackIndex);
+    return Number.isFinite(idx) && idx >= 0 ? Math.floor(idx) + 1 : null;
+}
+
 function niGetRenderedChatMessages() {
     const rows = [...document.querySelectorAll('#chat .mes[mesid]')];
     return rows.map(row => {
         const textEl = row.querySelector('.mes_text');
         const text = (textEl?.innerText || textEl?.textContent || '').trim();
         if (!text) return null;
+        const mesId = Number(row.getAttribute('mesid'));
+        const safeMesId = Number.isFinite(mesId) && mesId >= 0 ? Math.floor(mesId) : null;
         return {
             mes: text,
             name: row.getAttribute('ch_name') || row.querySelector('.name_text')?.textContent?.trim() || '',
             is_user: row.getAttribute('is_user') === 'true',
             is_system: row.getAttribute('is_system') === 'true',
-            mes_id: Number(row.getAttribute('mesid')),
+            mes_id: safeMesId,
+            _niFloor: safeMesId != null ? safeMesId + 1 : null,
         };
     }).filter(Boolean);
 }
@@ -7653,22 +7675,60 @@ function niGetCurrentChatMessages() {
         if (Array.isArray(ctx?.chat)) {
             const renderedById = new Map();
             const renderedVisibleByIndex = [];
-            niGetRenderedChatMessages().forEach((m) => {
-                if (Number.isFinite(m.mes_id)) renderedById.set(m.mes_id, m);
+            const renderedMessages = niGetRenderedChatMessages();
+            renderedMessages.forEach((m) => {
+                const mesId = niDevMessageMesId(m);
+                if (mesId != null) renderedById.set(mesId, m);
                 if (niDevIsCountableMessage(m)) renderedVisibleByIndex.push(m);
             });
+            const ctxVisibleCount = ctx.chat.filter(m => {
+                const role = String(m?.role || '').toLowerCase();
+                return !(m?.is_system || role === 'system');
+            }).length;
+            const useIndexRenderedFallback = renderedVisibleByIndex.length === ctxVisibleCount;
             let visibleIdx = 0;
-            return ctx.chat
+            const merged = ctx.chat
                 .map((m, i) => {
                     const role = String(m?.role || '').toLowerCase();
                     if (m?.is_system || role === 'system') return m;
-                    const id = Number(m?.mes_id ?? m?.id ?? i);
-                    const fallbackRendered = renderedVisibleByIndex[visibleIdx++];
-                    const rendered = renderedById.get(id) || fallbackRendered;
+                    const id = niDevMessageMesId(m);
+                    const fallbackRendered = useIndexRenderedFallback ? renderedVisibleByIndex[visibleIdx] : null;
+                    visibleIdx++;
+                    const rendered = (id != null ? renderedById.get(id) : null) || fallbackRendered;
+                    const renderedId = niDevMessageMesId(rendered);
+                    const mesId = renderedId != null ? renderedId : id;
                     const renderedText = String(rendered?.mes || '').trim();
-                    return renderedText ? { ...m, mes: renderedText } : m;
+                    return {
+                        ...m,
+                        ...(renderedText ? { mes: renderedText } : {}),
+                        ...(mesId != null ? { mes_id: mesId } : {}),
+                        _niFloor: mesId != null ? mesId + 1 : niDevMessageFloor(m, i),
+                    };
                 })
                 .filter(m => niDevIsCountableMessage(m));
+            const seenIds = new Set(
+                merged
+                    .map(m => niDevMessageMesId(m))
+                    .filter(id => id != null),
+            );
+            renderedMessages
+                .filter(m => niDevIsCountableMessage(m))
+                .forEach(m => {
+                    const id = niDevMessageMesId(m);
+                    if (id != null && seenIds.has(id)) return;
+                    merged.push(m);
+                    if (id != null) seenIds.add(id);
+                });
+            const byFloor = new Map();
+            merged.forEach((m, i) => {
+                const floor = niDevMessageFloor(m, i);
+                if (floor == null) return;
+                const existing = byFloor.get(floor);
+                if (!existing || (niDevMessageMesId(existing) == null && niDevMessageMesId(m) != null)) {
+                    byFloor.set(floor, m);
+                }
+            });
+            return [...byFloor.values()].sort((a, b) => (niDevMessageFloor(a) || 0) - (niDevMessageFloor(b) || 0));
         }
     } catch (_) {}
     return niGetRenderedChatMessages().filter(m => niDevIsCountableMessage(m));
@@ -7710,7 +7770,7 @@ function niDevRangeLabel(range) {
 
 function niBuildChatRangeContext(limit, range = null) {
     const messages = niGetCurrentChatMessages();
-    const total = messages.length;
+    const total = niCurrentChatFloorCount(messages);
     const safeLimit = Math.max(1, parseInt(limit, 10) || 1);
     let r = niNormalizeDevRange(range);
     if (!r) {
@@ -7726,13 +7786,17 @@ function niBuildChatRangeContext(limit, range = null) {
     }
     const startFloor = Math.max(1, r.startFloor);
     const endFloor = Math.min(total, Math.max(startFloor, r.endFloor));
-    const entries = [];
-    for (let i = startFloor - 1; i < endFloor; i++) {
-        const m = messages[i];
-        const text = niDevMessageText(m);
-        if (!text) continue;
-        entries.push({ floor: i + 1, role: niDevMessageRole(m), text });
-    }
+    const entries = messages
+        .map((m, i) => ({ m, floor: niDevMessageFloor(m, i) }))
+        .filter(({ floor }) => floor != null && floor >= startFloor && floor <= endFloor)
+        .sort((a, b) => a.floor - b.floor)
+        .map(({ m, floor }) => {
+            const text = niDevMessageText(m);
+            return text ? { floor, role: niDevMessageRole(m), text } : null;
+        })
+        .filter(Boolean);
+    const actualStartFloor = entries.length ? entries[0].floor : startFloor;
+    const actualEndFloor = entries.length ? entries[entries.length - 1].floor : endFloor;
     const text = entries
         .map(e => `${e.role} ${e.text}`)
         .join('\n');
@@ -7741,8 +7805,8 @@ function niBuildChatRangeContext(limit, range = null) {
         promptText: niBuildDevChatEntriesText(entries, NI_DEV_CURRENT_TEXT_LIMIT),
         recallText: niBuildDevChatEntriesText(entries, NI_DEV_RECALL_TEXT_LIMIT, { minEntryLimit: 60, preserveEachEntry: false }),
         entries,
-        startFloor,
-        endFloor,
+        startFloor: actualStartFloor,
+        endFloor: actualEndFloor,
         total,
         count: entries.length,
     };
@@ -8014,8 +8078,18 @@ async function niRunDev(options = {}) {
 }
 window.niRunDev = niRunDev;
 
-function niCurrentChatFloorCount() {
-    return niGetCurrentChatMessages().length;
+function niCurrentChatFloorCount(messages = null) {
+    const source = Array.isArray(messages) ? messages : niGetCurrentChatMessages();
+    const floors = source
+        .map((m, i) => niDevMessageFloor(m, i))
+        .filter(floor => floor != null && floor > 0);
+    if (!Array.isArray(messages)) {
+        niGetRenderedChatMessages().forEach((m, i) => {
+            const floor = niDevMessageFloor(m, i);
+            if (floor != null && floor > 0) floors.push(floor);
+        });
+    }
+    return floors.length ? Math.max(...floors) : 0;
 }
 
 function niResetDevAutoCounter() {
