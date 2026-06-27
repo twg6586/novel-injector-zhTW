@@ -7649,6 +7649,19 @@ function niDevMessageFloor(m, fallbackIndex = null) {
     return Number.isFinite(idx) && idx >= 0 ? Math.floor(idx) + 1 : null;
 }
 
+function niMergeDevMessagesByFloor(...sources) {
+    const byFloor = new Map();
+    sources.flat().filter(Boolean).forEach((m, i) => {
+        const floor = niDevMessageFloor(m, i);
+        if (floor == null) return;
+        const existing = byFloor.get(floor);
+        if (!existing || !niDevMessageText(existing) || (niDevMessageMesId(existing) == null && niDevMessageMesId(m) != null)) {
+            byFloor.set(floor, m);
+        }
+    });
+    return [...byFloor.values()].sort((a, b) => (niDevMessageFloor(a) || 0) - (niDevMessageFloor(b) || 0));
+}
+
 function niGetRenderedChatMessages() {
     const rows = [...document.querySelectorAll('#chat .mes[mesid]')];
     return rows.map(row => {
@@ -7718,16 +7731,7 @@ function niGetCurrentChatMessages() {
                     merged.push(m);
                     if (id != null) seenIds.add(id);
                 });
-            const byFloor = new Map();
-            merged.forEach((m, i) => {
-                const floor = niDevMessageFloor(m, i);
-                if (floor == null) return;
-                const existing = byFloor.get(floor);
-                if (!existing || (niDevMessageMesId(existing) == null && niDevMessageMesId(m) != null)) {
-                    byFloor.set(floor, m);
-                }
-            });
-            return [...byFloor.values()].sort((a, b) => (niDevMessageFloor(a) || 0) - (niDevMessageFloor(b) || 0));
+            return niMergeDevMessagesByFloor(merged);
         }
     } catch (_) {}
     return niGetRenderedChatMessages().filter(m => niDevIsCountableMessage(m));
@@ -7768,7 +7772,10 @@ function niDevRangeLabel(range) {
 }
 
 function niBuildChatRangeContext(limit, range = null) {
-    const messages = niGetCurrentChatMessages();
+    const messages = niMergeDevMessagesByFloor(
+        niGetCurrentChatMessages(),
+        niGetRenderedChatMessages().filter(m => niDevIsCountableMessage(m)),
+    );
     const total = niCurrentChatFloorCount(messages);
     const safeLimit = Math.max(1, parseInt(limit, 10) || 1);
     let r = niNormalizeDevRange(range);
