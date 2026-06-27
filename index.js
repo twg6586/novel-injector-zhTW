@@ -7588,8 +7588,12 @@ function niDevButtonLabel() {
 
 function niDevAutoEvery() {
     const cfg = extension_settings[EXT_NAME] || {};
-    if (!(cfg.devAutoUpdateEnabled ?? DEFAULT_SETTINGS.devAutoUpdateEnabled)) return 0;
-    return niBoundIntValue(cfg.devAutoUpdateEvery, DEFAULT_SETTINGS.devAutoUpdateEvery, 1, 9999);
+    const enabledEl = q('#ni-dev-auto-enabled');
+    const enabled = enabledEl ? enabledEl.checked : (cfg.devAutoUpdateEnabled ?? DEFAULT_SETTINGS.devAutoUpdateEnabled);
+    if (!enabled) return 0;
+    const everyEl = q('#ni-dev-auto-every');
+    const raw = everyEl ? everyEl.value : cfg.devAutoUpdateEvery;
+    return niBoundIntValue(raw, DEFAULT_SETTINGS.devAutoUpdateEvery, 1, 9999);
 }
 
 function niDevRecentMessageLimit(auto = false) {
@@ -8147,6 +8151,19 @@ function niNotifyDevAutoComplete(result) {
     alert(msg);
 }
 
+function niDevAutoSkipMessage(result) {
+    const reason = result?.reason || '';
+    if (reason === 'below_interval') {
+        return `自动更新已开启，目前已总结 ${result.covered}/${result.floor} 层，距离下次自动更新还差 ${Math.max(0, result.every - (result.floor - result.covered))} 层。`;
+    }
+    if (reason === 'busy') return '偏差分析正在运行，本次自动检查已跳过。';
+    if (reason === 'no_floor') return '自动更新已开启，但暂时没有读到当前对话楼层。';
+    if (reason === 'auto_disabled') return '自动更新已关闭，间隔层数可调整但不会自动运行。';
+    if (reason === 'plugin_disabled') return '插件当前未启用，自动更新不会运行。';
+    if (reason === 'waiting_first_deviation') return '自动更新已开启，首次偏差将在达到间隔层数后自动生成。';
+    return '自动更新已开启，达到间隔层数后会自动运行。';
+}
+
 let _niDevAutoBatchRunning = false;
 
 function niDevCoveredFloorFor(total) {
@@ -8160,32 +8177,32 @@ function niDevAutoCatchupReady(every, total = niCurrentChatFloorCount()) {
 }
 
 async function niMaybeAutoRunDev({ requireNewMessage = false, forceStart = false } = {}) {
-    if (extension_settings[EXT_NAME]?.pluginEnabled === false) return;
+    if (extension_settings[EXT_NAME]?.pluginEnabled === false) return { ok: false, skipped: true, reason: 'plugin_disabled' };
     const every = niDevAutoEvery();
     if (every <= 0) {
         S.devAutoLastFloor = null;
-        return;
+        return { ok: false, skipped: true, reason: 'auto_disabled' };
     }
 
     const floor = niCurrentChatFloorCount();
-    if (!floor) return;
+    if (!floor) return { ok: false, skipped: true, reason: 'no_floor' };
     if (requireNewMessage) {
         const lastFloor = S.devAutoLastFloor == null ? null : (parseInt(S.devAutoLastFloor, 10) || 0);
         if (lastFloor == null || floor <= lastFloor) {
             S.devAutoLastFloor = floor;
-            return;
+            return { ok: false, skipped: true, reason: 'no_new_message', floor, every };
         }
     }
     const covered = niDevCoveredFloorFor(floor);
     if (!forceStart && !covered && !niNormalizeDevRange(S.devLastRange)) {
         if (requireNewMessage) S.devAutoLastFloor = floor;
-        return;
+        return { ok: false, skipped: true, reason: 'waiting_first_deviation', floor, covered, every };
     }
     if (floor - covered < every) {
         if (requireNewMessage) S.devAutoLastFloor = floor;
-        return;
+        return { ok: false, skipped: true, reason: 'below_interval', floor, covered, every };
     }
-    if (S.devRunning || _niDevAutoBatchRunning) return;
+    if (S.devRunning || _niDevAutoBatchRunning) return { ok: false, skipped: true, reason: 'busy', floor, covered, every };
 
     _niDevAutoBatchRunning = true;
     const results = [];
@@ -8226,6 +8243,16 @@ async function niMaybeAutoRunDev({ requireNewMessage = false, forceStart = false
         };
     }
     return lastResult;
+}
+
+async function niStartDevAutoCatchup({ announce = false } = {}) {
+    if (niDevAutoEvery() <= 0) return { ok: false, skipped: true, reason: 'auto_disabled' };
+    niLoadDeviationStateFromChat({ allowLegacyMigration: false, collapsed: true, syncUI: false });
+    const noteEl = q('#ni-dev-note');
+    if (announce && noteEl) noteEl.textContent = '自动更新已开启，正在检查是否需要补跑偏差分析。';
+    const result = await niMaybeAutoRunDev({ forceStart: true });
+    if (result?.skipped && noteEl) noteEl.textContent = niDevAutoSkipMessage(result);
+    return result;
 }
 
 function niBindDeviationAutoUpdateEvents() {
@@ -10245,16 +10272,16 @@ jQuery(async () => {
     $app.on('change', '#ni-dev-auto-enabled', async () => {
         niSyncDevAutoUI({ syncNote: true });
         niSaveSettings();
-        niResetDevAutoCounter();
-        if (!q('#ni-dev-auto-enabled')?.checked) return;
-        const noteEl = q('#ni-dev-note');
-        if (noteEl) noteEl.textContent = '自动更新已开启，正在检查是否需要补跑偏差分析。';
-        const result = await niMaybeAutoRunDev({ forceStart: true }).catch(e => {
+        if (!q('#ni-dev-auto-enabled')?.checked) {
+            S.devAutoLastFloor = null;
+            return;
+        }
+        await niStartDevAutoCatchup({ announce: true }).catch(e => {
             console.warn('[NI] 自动偏差分析启动失败:', e);
+            const noteEl = q('#ni-dev-note');
             if (noteEl) noteEl.textContent = `自动更新启动失败: ${e.message || e}`;
             return { ok: false, error: e };
         });
-        if (!result && noteEl) noteEl.textContent = '自动更新已开启，达到间隔层数后会自动运行。';
     });
     $app.on('input change', '#ni-dev-auto-every, #ni-dev-manual-msg-count', () => {
         niSyncDevAutoUI();
@@ -10919,6 +10946,9 @@ jQuery(async () => {
     eventSource.on(event_types.CHAT_COMPLETION_PROMPT_READY, onPromptReady);
     niBindDeviationAutoUpdateEvents();
     niResetDevAutoCounter();
+    setTimeout(() => {
+        niStartDevAutoCatchup().catch(e => console.warn('[NI] 自动偏差分析启动追赶失败:', e));
+    }, 800);
 
     console.log('[NI] 小说注入插件 加载完成');
 });
