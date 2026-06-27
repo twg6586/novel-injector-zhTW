@@ -7693,10 +7693,7 @@ function niGetCurrentChatMessages() {
                 if (mesId != null) renderedById.set(mesId, m);
                 if (niDevIsCountableMessage(m)) renderedVisibleByIndex.push(m);
             });
-            const ctxVisibleCount = ctx.chat.filter(m => {
-                const role = String(m?.role || '').toLowerCase();
-                return !(m?.is_system || role === 'system');
-            }).length;
+            const ctxVisibleCount = ctx.chat.filter(m => niDevIsCountableMessage(m)).length;
             const useIndexRenderedFallback = renderedVisibleByIndex.length === ctxVisibleCount;
             let visibleIdx = 0;
             const merged = ctx.chat
@@ -7739,7 +7736,7 @@ function niGetCurrentChatMessages() {
 
 function niDevIsCountableMessage(m) {
     const role = String(m?.role || '').toLowerCase();
-    if (m?.is_system || role === 'system') return false;
+    if (role === 'system' || m?.extra?.isSmallSys === true) return false;
     return !!niDevMessageText(m);
 }
 
@@ -7750,8 +7747,8 @@ function niDevMessageText(m) {
 
 function niDevMessageRole(m) {
     const role = String(m?.role || '').toLowerCase();
-    if (m?.is_system || role === 'system') return '[系统]';
     if (m?.is_user || role === 'user') return '[用户]';
+    if (role === 'system' || m?.extra?.isSmallSys === true) return '[系统]';
     return '[AI]';
 }
 
