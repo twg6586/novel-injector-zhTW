@@ -4788,6 +4788,8 @@ function niSaveChar(i) {
             const aiRelations   = q(`#ni-cta-ai-relations-${i}`)?.value?.trim()   || '';
             if (aiIdentity || aiAppearance || aiPersonality || aiRelations) {
                 S.characters[i].aiProfile = { identity: aiIdentity, appearance: aiAppearance, personality: aiPersonality, relations: aiRelations };
+            } else {
+                delete S.characters[i].aiProfile;
             }
         }
     }
@@ -6051,6 +6053,36 @@ let _genCharsAbortController = null;
 const NI_CHAR_AI_PROFILE_RETRIES = 3;
 const NI_CHAR_AI_PROFILE_RESPONSE_LENGTH = 2000;
 
+function niNormalizeCharAiProfile(profile) {
+    return {
+        identity:    String(profile?.identity    || '').trim(),
+        appearance:  String(profile?.appearance  || '').trim(),
+        personality: String(profile?.personality || '').trim(),
+        relations:   String(profile?.relations   || '').trim(),
+    };
+}
+
+function niAiProfileHasContent(profile) {
+    const p = typeof profile === 'string'
+        ? { identity: String(profile || '').trim() }
+        : niNormalizeCharAiProfile(profile);
+    return !!(p.identity || p.appearance || p.personality || p.relations);
+}
+
+function niEmptyCharAiProfile(extra = {}) {
+    return { identity: '', appearance: '', personality: '', relations: '', ...extra };
+}
+
+function niCharAiSkipError(reason) {
+    const err = new Error(reason || '目标角色没有可更新的人设证据');
+    err.code = 'NI_CHAR_AI_SKIP';
+    return err;
+}
+
+function niIsCharAiSkipError(err) {
+    return err?.code === 'NI_CHAR_AI_SKIP';
+}
+
 function niIsAbortError(err) {
     return err?.name === 'AbortError' ||
         err?.message === 'AbortError' ||
@@ -6073,43 +6105,138 @@ function niAbortableDelay(ms, signal = null) {
     });
 }
 
-function niBuildCharAiProfilePrompt(c, recentChat, novelCtx) {
-    return `你是角色人设整理师。请为角色【${c.name}】生成当前状态的简短人设摘要。
-${recentChat ? `\n【当前对话记录（核心依据，优先参考）】\n${recentChat}\n` : ''}
-【原著剧情节点（背景参考，仅补充对话中未体现的基础信息）】
-${novelCtx}
+function niCharAiTextHasTarget(text, terms) {
+    const normalized = niNormalizePresenceText(text);
+    return (terms || []).some(term => niPresenceHasTerm(normalized, term));
+}
+
+function niCanUseCharAiEvidenceTerm(term) {
+    const t = String(term || '').trim();
+    if (!t || t.length < 2) return false;
+    if (t === '<user>' || /^user$/i.test(t)) return false;
+    return true;
+}
+
+function niBuildCharAiBaseProfile(c) {
+    const lines = [
+        `姓名：${c?.name || '未知'}`,
+        c?.role ? `分类：${c.role}` : '',
+        c?.gender ? `性别：${c.gender}` : '',
+        c?.identity ? `原始身份：${c.identity}` : '',
+        c?.appearance ? `原始外貌：${c.appearance}` : '',
+        c?.personality ? `原始性格：${c.personality}` : '',
+        c?.relations ? `原始关系：${c.relations}` : '',
+    ].filter(Boolean);
+    const aliases = (Array.isArray(c?.aliases) ? c.aliases : [])
+        .filter(alias => niCanUseAliasTextForPresence(alias))
+        .map(alias => String(alias?.text || '').trim())
+        .filter(niCanUseCharAiEvidenceTerm)
+        .filter(Boolean);
+    if (aliases.length) lines.push(`可靠别名：${[...new Set(aliases)].join('、')}`);
+    return lines.join('\n');
+}
+
+function niBuildCharAiProfileContext(c, idx) {
+    const baseTerms = niCharPresenceTerms(c).filter(niCanUseCharAiEvidenceTerm);
+    const cfg = niGetUserSubConfig();
+    const isUserSubTarget = !!(c && cfg.userSubEnabled && niIsUserSubPlayMode(cfg) && niIsUserSubProtectedChar(c, idx));
+    const evidenceTerms = [...baseTerms];
+    if (isUserSubTarget) {
+        ['<user>', 'user', ...niGetActiveUserSubNames()].forEach(term => {
+            const t = String(term || '').trim();
+            if (t && !evidenceTerms.includes(t)) evidenceTerms.push(t);
+        });
+    }
+
+    const ctx = getContext?.();
+    const rawMessages = (ctx?.chat || []).slice(-40)
+        .map((m, localIdx) => ({
+            localIdx,
+            isUser: !!m.is_user,
+            name: m.name || (m.is_user ? '用户' : 'AI'),
+            text: String(m.mes || '').trim(),
+        }))
+        .filter(m => m.text);
+
+    const hitIdx = [];
+    rawMessages.forEach((m, localIdx) => {
+        if (niCharAiTextHasTarget(m.text, evidenceTerms)) hitIdx.push(localIdx);
+    });
+
+    const includeIdx = new Set();
+    hitIdx.forEach(i => {
+        includeIdx.add(i);
+        if (i > 0) includeIdx.add(i - 1);
+        if (i < rawMessages.length - 1) includeIdx.add(i + 1);
+    });
+
+    const recentChat = rawMessages
+        .filter((_, i) => includeIdx.has(i))
+        .map(m => `${m.name || (m.isUser ? '用户' : 'AI')}：${m.text}`)
+        .join('\n')
+        .slice(-30000);
+
+    const allNodes = niGetAllPlotsInStoryOrder();
+    const novelCtx = allNodes
+        .filter(p => niCharAiTextHasTarget([
+            p.title,
+            p.time,
+            p.location,
+            p.body,
+            Array.isArray(p.sub_notes) ? p.sub_notes.join('\n') : '',
+        ].filter(Boolean).join('\n'), baseTerms))
+        .slice(0, 30)
+        .map(p => `[${p.title}] ${p.body}`)
+        .join('\n');
+
+    return {
+        targetName: c?.name || '',
+        baseProfile: niBuildCharAiBaseProfile(c),
+        targetTerms: baseTerms.join('、'),
+        recentChat,
+        novelCtx,
+        hasTargetEvidence: hitIdx.length > 0,
+        isUserSubTarget,
+    };
+}
+
+function niBuildCharAiProfilePrompt(c, charCtx) {
+    const userSubRule = charCtx?.isUserSubTarget
+        ? '目标角色就是当前用户代入的原著角色；只有当对话明确以 <user> 或目标角色可靠别名描写其状态时，才可作为目标角色证据。'
+        : '目标角色不是 <user>。任何 <user>、用户、玩家、我、你 的身份、外貌、性格和关系都不得写入目标角色。';
+
+    return `你是角色人设整理师。请只为目标角色【${c.name}】生成当前状态的简短人设摘要。
+
+【目标角色资料】
+${charCtx?.baseProfile || `姓名：${c.name}`}
+
+【用户代入边界】
+${userSubRule}
+
+【近期对话中命中目标角色的证据（核心依据）】
+${charCtx?.recentChat || '（无）'}
+
+【目标角色相关原著节点（只能作固定背景参考）】
+${charCtx?.novelCtx || '（无）'}
 
 要求：
-- 只记录【${c.name}】本人在对话中有直接描写的内容；若该角色在对话中完全未出场，所有字段返回空字符串
-- 禁止将发生在其他角色身上的事件推断或转移到【${c.name}】身上
+- 只记录【${c.name}】本人在近期对话中有直接描写的当前状态；若证据不足，appeared 返回 false，四个人设字段返回空字符串
+- 禁止将发生在其他角色、<user>、叙事视角人物或被称为“我/你”的对象身上的事件推断或转移到【${c.name}】身上
 - 禁止根据"其他角色对【${c.name}】做了某事"来推导【${c.name}】的当前状态，除非对话原文明确描写了【${c.name}】本人的当前状态
-- 原著节点仅用于补全对话中完全未涉及的基础背景，不得覆盖对话中已体现的新变化
+- 原著节点只能补充【${c.name}】的固定基础背景；不能单独证明近期状态，更不能覆盖对话中已体现的新变化
+- 若证据里没有出现【${c.name}】或可靠别名（${charCtx?.targetTerms || c.name}），不得仅凭代词、称谓或无所有者的泛称生成
 - 严格控制字数，按下面结构输出，不输出任何其他文字：
-{"identity":"身份背景15字内","appearance":"外貌10字内或空字符串","personality":"性格15字内","relations":"关系20字内或空字符串"}
+{"target":"${c.name}","appeared":true,"identity":"身份背景15字内","appearance":"外貌10字内或空字符串","personality":"性格15字内","relations":"关系20字内或空字符串"}
 
 输出前暗中自检一次，不输出自检过程：
-- 是否只包含 identity、appearance、personality、relations 四个字段
+- target 是否仍是【${c.name}】，没有换成 <user> 或其他角色
+- 是否只包含 target、appeared、identity、appearance、personality、relations 六个字段
 - 所有字段是否均为字符串，信息不足时是否输出空字符串
-- 是否只记录【${c.name}】本人在对话或原著节点中明确成立的信息
+- 是否只记录【${c.name}】本人在对话中明确成立的信息
 - 是否没有 Markdown、代码块或结构外文本`;
 }
 
-function niBuildCharAiProfileContext() {
-    const allNodes = niGetAllPlotsInStoryOrder();
-    const novelCtx = allNodes.map(p => `[${p.title}] ${p.body}`).slice(0, 80).join('\n');
-
-    const ctx = getContext?.();
-    const recentChat = (ctx?.chat || [])
-        .slice(-20)
-        .filter(m => m.mes && !m.is_user)
-        .map(m => `${m.name || 'AI'}：${m.mes}`)
-        .join('\n')
-        .slice(0, 50000);
-
-    return { novelCtx, recentChat };
-}
-
-function niParseCharAiProfile(raw) {
+function niParseCharAiProfile(raw, c) {
     const text = String(raw || '').replace(/```json|```/g, '').trim();
     if (!text) throw new Error('AI 返回为空');
 
@@ -6124,6 +6251,15 @@ function niParseCharAiProfile(raw) {
         throw new Error('AI 返回 JSON 结构异常');
     }
 
+    const target = String(parsed.target || parsed.name || '').trim();
+    if (target && !niCharNameMatchesTerm(c, target) && !_isSameChar(c, { name: target })) {
+        throw new Error(`AI 返回目标角色不匹配：${target}`);
+    }
+
+    if (parsed.appeared === false || String(parsed.appeared).toLowerCase() === 'false') {
+        return niEmptyCharAiProfile({ _noEvidence: true });
+    }
+
     return {
         identity:    String(parsed.identity    || ''),
         appearance:  String(parsed.appearance  || ''),
@@ -6132,9 +6268,14 @@ function niParseCharAiProfile(raw) {
     };
 }
 
-async function niGenerateCharAiProfileWithRetry(i, charCtx, onRetry = null, { signal = null } = {}) {
+async function niGenerateCharAiProfileWithRetry(i, charCtx, onRetry = null, { signal = null, noEvidenceMode = 'skip' } = {}) {
     const c = S.characters[i];
     if (!c) throw new Error('角色不存在');
+
+    if (!charCtx?.hasTargetEvidence) {
+        if (noEvidenceMode === 'clear') return niEmptyCharAiProfile({ _noEvidence: true });
+        throw niCharAiSkipError(`近期对话没有直接出现「${c.name}」或可靠别名`);
+    }
 
     let lastErr = null;
     for (let attempt = 0; attempt <= NI_CHAR_AI_PROFILE_RETRIES; attempt++) {
@@ -6142,11 +6283,17 @@ async function niGenerateCharAiProfileWithRetry(i, charCtx, onRetry = null, { si
         try {
             const raw = await callApiSeq([{
                 role: 'user',
-                content: niBuildCharAiProfilePrompt(c, charCtx.recentChat, charCtx.novelCtx),
+                content: niBuildCharAiProfilePrompt(c, charCtx),
             }], { responseLength: NI_CHAR_AI_PROFILE_RESPONSE_LENGTH, signal });
-            return niParseCharAiProfile(raw);
+            const parsed = niParseCharAiProfile(raw, c);
+            if (parsed._noEvidence || !niAiProfileHasContent(parsed)) {
+                if (noEvidenceMode === 'clear') return niEmptyCharAiProfile({ _noEvidence: true });
+                throw niCharAiSkipError(`「${c.name}」没有可更新的人设证据`);
+            }
+            return niNormalizeCharAiProfile(parsed);
         } catch (e) {
             if (signal?.aborted || niIsAbortError(e)) throw e;
+            if (niIsCharAiSkipError(e)) throw e;
             lastErr = e;
             if (attempt < NI_CHAR_AI_PROFILE_RETRIES) {
                 onRetry?.(attempt + 1, e);
@@ -6162,12 +6309,13 @@ function niApplyCharAiProfile(i, profile) {
     const c2 = S.characters[i];
     if (!c2) return;
 
-    c2.aiProfile = {
-        identity:    profile.identity    || '',
-        appearance:  profile.appearance  || '',
-        personality: profile.personality || '',
-        relations:   profile.relations   || '',
-    };
+    const nextProfile = niNormalizeCharAiProfile(profile);
+    const hasContent = niAiProfileHasContent(nextProfile);
+    if (hasContent) {
+        c2.aiProfile = nextProfile;
+    } else {
+        delete c2.aiProfile;
+    }
 
     const detailEl = q(`#ni-cbio-${i}`);
     if (detailEl) {
@@ -6185,23 +6333,27 @@ function niApplyCharAiProfile(i, profile) {
         }
     }
     if (aipEl) {
-        const aiEyeOn = c2.showAi !== false;
-        aipEl.className = 'ni-char-ai-profile';
-        aipEl.style.display = '';
-        aipEl.innerHTML = `
-          <div class="ni-char-ai-profile-hdr">
-            <span class="ni-char-ai-profile-lbl"><i class="ti ti-sparkles"></i>AI 实时人设</span>
-            <button class="ni-char-eye ni-char-eye-ai${aiEyeOn ? ' on' : ''}" data-char-idx="${i}" title="AI人设注入开/关"><i class="ti ${aiEyeOn ? 'ti-eye' : 'ti-eye-off'}"></i></button>
-          </div>
-          <div class="ni-char-ai-body">${aiEyeOn ? niRenderAiFields(c2.aiProfile) : '（已关闭注入）'}</div>`;
+        if (hasContent) {
+            const aiEyeOn = c2.showAi !== false;
+            aipEl.className = 'ni-char-ai-profile';
+            aipEl.style.display = '';
+            aipEl.innerHTML = `
+              <div class="ni-char-ai-profile-hdr">
+                <span class="ni-char-ai-profile-lbl"><i class="ti ti-sparkles"></i>AI 实时人设</span>
+                <button class="ni-char-eye ni-char-eye-ai${aiEyeOn ? ' on' : ''}" data-char-idx="${i}" title="AI人设注入开/关"><i class="ti ${aiEyeOn ? 'ti-eye' : 'ti-eye-off'}"></i></button>
+              </div>
+              <div class="ni-char-ai-body">${aiEyeOn ? niRenderAiFields(c2.aiProfile) : '（已关闭注入）'}</div>`;
+        } else {
+            aipEl.remove();
+        }
     }
 
     ['identity', 'appearance', 'personality', 'relations'].forEach(key => {
         const el = q(`#ni-cta-ai-${key}-${i}`);
-        if (el) el.value = c2.aiProfile[key] || '';
+        if (el) el.value = c2.aiProfile?.[key] || '';
     });
     const aiArea = q(`#ni-cef-ai-${i}`);
-    if (aiArea) aiArea.style.display = 'block';
+    if (aiArea) aiArea.style.display = hasContent ? 'block' : 'none';
 }
 
 async function niGenCharsManual(silent = false, skipIndices = null) {
@@ -6242,10 +6394,11 @@ async function niGenCharsManual(silent = false, skipIndices = null) {
     if (prog) prog.style.display = 'flex';
     if (card) card.classList.add('ni-has-prog');
 
-    const charCtx = niBuildCharAiProfileContext();
     const enabledIndices = S.characters.map((c, i) => c.enabled ? i : -1).filter(i => i !== -1 && !(skipIndices && skipIndices.has(i)));
     const total = enabledIndices.length;
     const failures = [];
+    let skipped = 0;
+    let cleared = 0;
     let done = 0;
     let cancelled = false;
 
@@ -6259,20 +6412,26 @@ async function niGenCharsManual(silent = false, skipIndices = null) {
         if (note) note.textContent = `角色 ${ei + 1}/${total}：${c.name}`;
         if (bar)  bar.style.width = `${Math.round((ei / total) * 92)}%`;
         try {
+            const charCtx = niBuildCharAiProfileContext(c, i);
             const profile = await niGenerateCharAiProfileWithRetry(i, charCtx, (retryNo, err) => {
                 if (note) note.textContent = `角色 ${ei + 1}/${total}：${c.name}（重试 ${retryNo}/${NI_CHAR_AI_PROFILE_RETRIES}）`;
                 console.warn(`[NI] 角色 ${c.name} 人设第 ${retryNo} 次重试：`, err);
-            }, { signal: controller.signal });
+            }, { signal: controller.signal, noEvidenceMode: silent ? 'skip' : 'clear' });
             if (controller.signal.aborted) {
                 cancelled = true;
                 break;
             }
             niApplyCharAiProfile(i, profile);
-            done++;
+            if (profile._noEvidence) cleared++;
+            else done++;
         } catch (e) {
             if (controller.signal.aborted || niIsAbortError(e)) {
                 cancelled = true;
                 break;
+            }
+            if (niIsCharAiSkipError(e)) {
+                skipped++;
+                continue;
             }
             console.warn(`[NI] 角色 ${c.name} 人设更新失败:`, e);
             failures.push(`${c.name}：${e.message || e}`);
@@ -6284,9 +6443,16 @@ async function niGenCharsManual(silent = false, skipIndices = null) {
         if (!cancelled) bar.classList.add('g');
     }
     if (note) {
-        note.textContent = cancelled
-            ? `已取消，已更新 ${done}/${total} 位角色`
-            : (failures.length ? `${failures.length} 位角色更新失败` : `全部 ${total} 位角色已更新`);
+        if (cancelled) {
+            note.textContent = `已取消，已更新 ${done}/${total} 位角色`;
+        } else {
+            const parts = [];
+            if (done) parts.push(`更新 ${done} 位`);
+            if (cleared) parts.push(`清空 ${cleared} 位无近期证据`);
+            if (skipped) parts.push(`跳过 ${skipped} 位无近期证据`);
+            if (failures.length) parts.push(`失败 ${failures.length} 位`);
+            note.textContent = parts.length ? parts.join('，') : '没有可更新的人设';
+        }
         note.classList.add(cancelled || failures.length ? 'bad' : 'g');
     }
     setTimeout(() => {
@@ -6337,15 +6503,19 @@ async function niGenOneCharManual(i) {
     }
 
     try {
-        const charCtx = niBuildCharAiProfileContext();
+        const charCtx = niBuildCharAiProfileContext(c, i);
         const profile = await niGenerateCharAiProfileWithRetry(i, charCtx, (retryNo, err) => {
             console.warn(`[NI] 角色 ${c.name} 人设第 ${retryNo} 次重试：`, err);
-        });
+        }, { noEvidenceMode: 'skip' });
         niApplyCharAiProfile(i, profile);
         niSaveSettings();
     } catch (e) {
         console.warn(`[NI] 角色 ${c.name} 人设更新失败:`, e);
-        alert(`角色「${c.name}」AI 实时人设更新失败：${e.message || e}`);
+        if (niIsCharAiSkipError(e)) {
+            alert(`近期对话没有直接出现「${c.name}」或可靠别名，已保留现有 AI 人设。`);
+        } else {
+            alert(`角色「${c.name}」AI 实时人设更新失败：${e.message || e}`);
+        }
     } finally {
         if (btn) {
             btn.disabled = false;
@@ -8388,7 +8558,7 @@ async function onPromptReady(eventData) {
             const lines = [`[${tagName}：${c.name}（${c.role || '其他'}）]`];
             const showRaw = c.showRaw !== false;
             const showAi  = c.showAi  !== false;
-            if (showAi && c.aiProfile) {
+            if (showAi && niAiProfileHasContent(c.aiProfile)) {
                 if (typeof c.aiProfile === 'object') {
                     const p = c.aiProfile;
                     if (p.identity)    lines.push(`身份：${p.identity}`);
