@@ -1739,8 +1739,9 @@ function niSyncDeviationResultUI({ collapsed = true, preserveBody = false } = {}
     const badge = q('#ni-dev-floor-badge');
     niSyncDeviationSectionInputs();
     if (badge) {
-        const covered = Math.max(0, parseInt(S.devCoveredFloor, 10) || 0);
-        const total = Math.max(covered, niCurrentChatFloorCount());
+        const rawCovered = Math.max(0, parseInt(S.devCoveredFloor, 10) || 0);
+        const total = niCurrentChatFloorCount();
+        const covered = total > 0 ? Math.min(rawCovered, total) : rawCovered;
         badge.textContent = total > 0 ? `已总结 ${covered}/${total} 层` : `已总结 ${covered} 层`;
     }
     if (wrap) wrap.style.display = text ? 'block' : 'none';
@@ -7643,9 +7644,9 @@ function niDevMessageMesId(m) {
 
 function niDevMessageFloor(m, fallbackIndex = null) {
     const explicit = Number(m?._niFloor ?? m?.floor);
-    if (Number.isFinite(explicit) && explicit > 0) return Math.floor(explicit);
+    if (Number.isFinite(explicit) && explicit >= 0) return Math.floor(explicit);
     const mesId = niDevMessageMesId(m);
-    if (mesId != null) return mesId + 1;
+    if (mesId != null) return mesId;
     const idx = Number(fallbackIndex);
     return Number.isFinite(idx) && idx >= 0 ? Math.floor(idx) + 1 : null;
 }
@@ -7664,7 +7665,7 @@ function niGetRenderedChatMessages() {
             is_user: row.getAttribute('is_user') === 'true',
             is_system: row.getAttribute('is_system') === 'true',
             mes_id: safeMesId,
-            _niFloor: safeMesId != null ? safeMesId + 1 : null,
+            _niFloor: safeMesId,
         };
     }).filter(Boolean);
 }
@@ -7702,7 +7703,7 @@ function niGetCurrentChatMessages() {
                         ...m,
                         ...(renderedText ? { mes: renderedText } : {}),
                         ...(mesId != null ? { mes_id: mesId } : {}),
-                        _niFloor: mesId != null ? mesId + 1 : niDevMessageFloor(m, i),
+                        _niFloor: mesId != null ? mesId : niDevMessageFloor(m, i),
                     };
                 })
                 .filter(m => niDevIsCountableMessage(m));
@@ -8082,11 +8083,11 @@ function niCurrentChatFloorCount(messages = null) {
     const source = Array.isArray(messages) ? messages : niGetCurrentChatMessages();
     const floors = source
         .map((m, i) => niDevMessageFloor(m, i))
-        .filter(floor => floor != null && floor > 0);
+        .filter(floor => floor != null && floor >= 0);
     if (!Array.isArray(messages)) {
         niGetRenderedChatMessages().forEach((m, i) => {
             const floor = niDevMessageFloor(m, i);
-            if (floor != null && floor > 0) floors.push(floor);
+            if (floor != null && floor >= 0) floors.push(floor);
         });
     }
     return floors.length ? Math.max(...floors) : 0;
