@@ -7646,7 +7646,7 @@ function niDevMessageFloor(m, fallbackIndex = null) {
     const mesId = niDevMessageMesId(m);
     if (mesId != null) return mesId;
     const idx = Number(fallbackIndex);
-    return Number.isFinite(idx) && idx >= 0 ? Math.floor(idx) + 1 : null;
+    return Number.isFinite(idx) && idx >= 0 ? Math.floor(idx) : null;
 }
 
 function niMergeDevMessagesByFloor(...sources) {
