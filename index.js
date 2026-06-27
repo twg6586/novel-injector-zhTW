@@ -16,6 +16,8 @@ import {
     event_types,
     extractMessageFromData,
     getRequestHeaders,
+    messageFormatting,
+    name1,
     substituteParams,
 } from '/script.js';
 
@@ -5511,6 +5513,100 @@ function niGetActiveUserSubNames() {
         });
 }
 
+function niUserSubAliasText(alias) {
+    return String(alias?.text || alias?.name || alias?.alias || alias?.title || '').trim();
+}
+
+function niUserSubAliasIsTitle(alias) {
+    return String(alias?.kind || alias?.type || '').trim().toLowerCase() === 'title';
+}
+
+function niGetActiveUserSubIdentityNames() {
+    const cfg = niGetUserSubConfig();
+    if (!cfg.userSubEnabled) return [];
+    const seen = new Set();
+    return (cfg.userSubAliases || [])
+        .filter(niUserSubAliasIsActive)
+        .filter(alias => !niUserSubAliasIsTitle(alias))
+        .map(niUserSubAliasText)
+        .filter(name => name && name !== '<user>' && !/^user$/i.test(name))
+        .sort((a, b) => b.length - a.length)
+        .filter(name => {
+            if (seen.has(name)) return false;
+            seen.add(name);
+            return true;
+        });
+}
+
+function niGetUserSubTitleNames() {
+    const cfg = niGetUserSubConfig();
+    if (!cfg.userSubEnabled) return [];
+    const seen = new Set();
+    const titles = [];
+    const add = (name) => {
+        const n = String(name || '').trim();
+        if (!n || n === '<user>' || /^user$/i.test(n) || seen.has(n)) return;
+        seen.add(n);
+        titles.push(n);
+    };
+    const selectedIdx = parseInt(cfg.userSubCharIdx, 10);
+    const selectedChar = S.characters?.[selectedIdx];
+    (Array.isArray(selectedChar?.aliases) ? selectedChar.aliases : [])
+        .filter(niUserSubAliasIsTitle)
+        .forEach(alias => add(niUserSubAliasText(alias)));
+    (cfg.userSubAliases || [])
+        .filter(niUserSubAliasIsActive)
+        .filter(niUserSubAliasIsTitle)
+        .forEach(alias => add(niUserSubAliasText(alias)));
+    return titles.sort((a, b) => b.length - a.length);
+}
+
+function niGetUserSubstitutionNames() {
+    const cfg = niGetUserSubConfig();
+    if (!cfg.userSubEnabled) return [];
+    const seen = new Set();
+    const names = [];
+    const add = (name) => {
+        const n = String(name || '').trim();
+        if (!n || n === '<user>' || /^user$/i.test(n) || seen.has(n)) return;
+        seen.add(n);
+        names.push(n);
+    };
+    const addWithShortNames = (name) => {
+        const n = String(name || '').trim();
+        if (!n) return;
+        add(n);
+        niCharPresenceTerms({ name: n, aliases: [] }).forEach(add);
+    };
+    const primaryName = niGetSelectedUserSubCharName();
+    addWithShortNames(primaryName);
+    const selectedIdx = parseInt(cfg.userSubCharIdx, 10);
+    const selectedChar = S.characters?.[selectedIdx];
+    (Array.isArray(selectedChar?.aliases) ? selectedChar.aliases : []).forEach(alias => {
+        if (niUserSubAliasIsTitle(alias)) return;
+        const text = niUserSubAliasText(alias);
+        if (text.length >= 2) addWithShortNames(text);
+    });
+    niGetActiveUserSubIdentityNames().forEach(addWithShortNames);
+    return names.sort((a, b) => b.length - a.length);
+}
+
+function niGetUserSubOutputName() {
+    const candidates = [];
+    try {
+        const ctx = getContext?.();
+        candidates.push(ctx?.name1);
+    } catch (_) {}
+    candidates.push(name1);
+    try {
+        candidates.push(substituteParams('{{user}}'));
+    } catch (_) {}
+    const name = candidates
+        .map(v => String(v || '').trim())
+        .find(v => v && v !== '{{user}}');
+    return name || '<user>';
+}
+
 function niGetSelectedUserSubCharName() {
     const cfg = niGetUserSubConfig();
     const idx = parseInt(cfg.userSubCharIdx, 10);
@@ -5528,9 +5624,17 @@ function niGetUserSubPromptField(state = niGetUserSubPromptState()) {
     return 'userSubPromptReplace';
 }
 
+function niIsLegacyDefaultUserSubPrompt(state, text) {
+    if (state !== 'replace') return false;
+    const t = String(text || '').trim();
+    return /^\[用户代入角色\]\n<user>代表原著角色「[^」]+」。以下称呼只作为同一角色的映射：[\s\S]*。后续正文使用<user>，不要把原名或称呼写成另一个角色。\n\[\/用户代入角色\]$/.test(t);
+}
+
 function niGetUserSubCustomPrompt(state = niGetUserSubPromptState(), cfg = niGetUserSubConfig()) {
     const field = niGetUserSubPromptField(state);
-    return typeof cfg[field] === 'string' ? cfg[field] : null;
+    if (typeof cfg[field] !== 'string') return null;
+    if (niIsLegacyDefaultUserSubPrompt(state, cfg[field])) return null;
+    return cfg[field];
 }
 
 function niSaveUserSubPromptFromUI() {
@@ -5546,11 +5650,19 @@ function niBuildDefaultUserSubIdentityPrompt() {
     if (!cfg.userSubEnabled) return '';
 
     const primaryName = niGetSelectedUserSubCharName();
+    const outputName = niGetUserSubOutputName();
+    const outputLine = outputName && outputName !== '<user>'
+        ? `当前用户显示名是「${outputName}」；<user>与「${outputName}」是同一人。正文中提到该代入角色时优先写「${outputName}」。`
+        : `<user>就是当前用户。正文中提到该代入角色时使用 <user>。`;
     const names = [];
-    [primaryName, ...niGetActiveUserSubNames()].forEach(name => {
+    [primaryName, ...niGetActiveUserSubIdentityNames()].forEach(name => {
         const n = (name || '').trim();
         if (n && !names.includes(n)) names.push(n);
     });
+    const titleNames = niGetUserSubTitleNames();
+    const titleLine = titleNames.length
+        ? `以下称谓是他人对 <user> 的身份/礼貌称呼，可在对话和叙述中保留：${titleNames.join('、')}；但它们不得指向另一个独立角色。`
+        : '';
     if (!names.length) return '';
 
     const displayName = primaryName || names[0];
@@ -5558,16 +5670,35 @@ function niBuildDefaultUserSubIdentityPrompt() {
         const namesLine = names.length > 1
             ? `「${displayName}」及其别称/称呼（${names.join('、')}）均指向 <user>，不得再把「${displayName}」作为独立NPC演绎。`
             : `「${displayName}」指向 <user>，不得再把「${displayName}」作为独立NPC演绎。`;
-        return `[用户代入角色]\n<user>正在扮演原著角色「${displayName}」本人。\n${namesLine}\n可将当前剧情时间点以前已经成立的身份、关系与经历作为 <user> 的既有事实。\n当前剧情时间点之后的原著选择、行动和结局只作为参考惯性，不得因为原著中「${displayName}」这样做过，就强制让 <user> 复刻。\n[/用户代入角色]`;
+        return `[用户代入角色]\n<user>正在扮演原著角色「${displayName}」本人。\n${outputLine}\n${namesLine}\n${titleLine ? `${titleLine}\n` : ''}可将当前剧情时间点以前已经成立的身份、关系与经历作为 <user> 的既有事实。\n当前剧情时间点之后的原著选择、行动和结局只作为参考惯性，不得因为原著中「${displayName}」这样做过，就强制让 <user> 复刻。\n[/用户代入角色]`;
     }
-    return `[用户代入角色]\n<user>代表原著角色「${displayName}」。以下称呼只作为同一角色的映射：${names.join('、')}。后续正文使用<user>，不要把原名或称呼写成另一个角色。\n[/用户代入角色]`;
+    return `[用户代入角色]\n<user>替换原著角色「${displayName}」在原著中的人生位置。\n${outputLine}\n以下身份名称只指向 <user>：${names.join('、')}。\n${titleLine ? `${titleLine}\n` : ''}在当前分支中，不存在一个与 <user> 同时独立行动的「${displayName}」NPC；看到小说原著片段、剧情节点、角色人设里的身份名称时，都按 <user> 的身份、关系、过往和处境理解。\n输出正文时，身份名使用用户显示名或 <user>；身份/礼貌称谓可以保留为称呼。不要让该原角作为独立NPC出场、说话、行动或承接关系。\n当前剧情时间点之后的原著选择、行动和结局只作为参考惯性，不得强迫 <user> 复刻。\n[/用户代入角色]`;
+}
+
+function niBuildUserSubRuntimeGuard() {
+    const cfg = niGetUserSubConfig();
+    if (!cfg.userSubEnabled) return '';
+    const primaryName = niGetSelectedUserSubCharName();
+    const names = niGetUserSubstitutionNames();
+    if (!primaryName && !names.length) return '';
+    const outputName = niGetUserSubOutputName();
+    const outputLabel = outputName && outputName !== '<user>' ? `「${outputName}」` : '<user>';
+    const sourceNames = names.length ? names.join('、') : primaryName;
+    const titleNames = niGetUserSubTitleNames();
+    const titleLine = titleNames.length
+        ? `以下称谓可作为他人对 ${outputLabel} 的身份/礼貌称呼保留，不需要替换成姓名，但不得指向另一个独立角色：${titleNames.join('、')}。\n`
+        : '';
+    return `[用户代入强制映射]\n本轮请求中，以下原著身份名称都不是独立角色，而是当前用户 ${outputLabel}：${sourceNames}。\n${titleLine}在阅读聊天历史、角色卡、世界书、小说片段、剧情节点、角色人设和偏差档案时，凡出现这些身份名称，都按 ${outputLabel} 理解。\n输出正文时不得继续使用这些身份名称来指代该用户代入角色；应写 ${outputLabel}。身份/礼貌称谓可按场景保留。除非剧情明确讨论“原著文本中的名字”这个概念，否则不要把这些名称作为可出场 NPC 写出。\n[/用户代入强制映射]`;
 }
 
 function niBuildUserSubIdentityPrompt() {
     const cfg = niGetUserSubConfig();
     if (!cfg.userSubEnabled) return '';
     const customPrompt = niGetUserSubCustomPrompt(niGetUserSubPromptState(cfg), cfg);
-    if (customPrompt !== null) return customPrompt;
+    if (customPrompt !== null) {
+        const guard = niBuildUserSubRuntimeGuard();
+        return guard ? `${customPrompt.trim()}\n\n${guard}` : customPrompt;
+    }
     return niBuildDefaultUserSubIdentityPrompt();
 }
 
@@ -5623,15 +5754,79 @@ function niReplaceOutsideAngleTags(text, pattern, replacement) {
     }).join('');
 }
 
-function niApplyUserSubstitution(text) {
+function niApplyUserSubstitution(text, replacement = niGetUserSubOutputName()) {
     if (typeof text !== 'string' || !text) return text;
-    const names = niGetActiveUserSubNames();
+    const names = niGetUserSubstitutionNames();
     if (!names.length) return text;
     let out = text;
     names.forEach(name => {
-        out = niReplaceOutsideAngleTags(out, new RegExp(niEscapeRegExp(name), 'g'), '<user>');
+        out = niReplaceOutsideAngleTags(out, new RegExp(niEscapeRegExp(name), 'g'), replacement || '<user>');
     });
     return out;
+}
+
+function niApplyUserSubstitutionToContent(content) {
+    if (typeof content === 'string') return niApplyUserSubstitution(content);
+    if (Array.isArray(content)) {
+        content.forEach(part => {
+            if (!part || typeof part !== 'object') return;
+            if (typeof part.text === 'string') part.text = niApplyUserSubstitution(part.text);
+            if (typeof part.content === 'string') part.content = niApplyUserSubstitution(part.content);
+        });
+    }
+    return content;
+}
+
+function niShouldSkipUserSubRewriteContent(content) {
+    const text = typeof content === 'string'
+        ? content
+        : (Array.isArray(content)
+            ? content.map(part => typeof part?.text === 'string' ? part.text : (typeof part?.content === 'string' ? part.content : '')).join('\n')
+            : '');
+    return /\[(用户代入角色|用户代入强制映射|关于用户角色)\]/.test(text);
+}
+
+function niApplyUserSubstitutionToPromptMessages(messages) {
+    if (!Array.isArray(messages) || !niGetUserSubstitutionNames().length) return;
+    messages.forEach(msg => {
+        if (!msg || typeof msg !== 'object') return;
+        if (niShouldSkipUserSubRewriteContent(msg.content)) return;
+        if (Object.prototype.hasOwnProperty.call(msg, 'content')) {
+            msg.content = niApplyUserSubstitutionToContent(msg.content);
+        }
+        if (typeof msg.mes === 'string') msg.mes = niApplyUserSubstitution(msg.mes);
+    });
+}
+
+function niFinalUserSubPromptRewrite(eventData) {
+    if (eventData?.dryRun) return;
+    if (extension_settings[EXT_NAME]?.pluginEnabled === false) return;
+    niApplyUserSubstitutionToPromptMessages(eventData?.chat);
+}
+
+function niPostprocessUserSubMessage(messageId) {
+    const cfg = niGetUserSubConfig();
+    if (!cfg.userSubEnabled || !niGetUserSubstitutionNames().length) return;
+    const id = Number(messageId);
+    if (!Number.isFinite(id) || id < 0) return;
+    try {
+        const ctx = getContext?.();
+        const msg = ctx?.chat?.[id];
+        if (!msg || msg.is_user || typeof msg.mes !== 'string') return;
+        const before = msg.mes;
+        const after = niApplyUserSubstitution(before);
+        if (after === before) return;
+        msg.mes = after;
+        const swipeId = Number.isFinite(Number(msg.swipe_id)) ? Number(msg.swipe_id) : 0;
+        if (Array.isArray(msg.swipes) && msg.swipes[swipeId] === before) msg.swipes[swipeId] = after;
+        const el = document.querySelector(`#chat .mes[mesid="${id}"] .mes_text`);
+        if (el && typeof messageFormatting === 'function') {
+            el.innerHTML = messageFormatting(after, msg.name, msg.is_system, msg.is_user, id, {}, false);
+        }
+        if (typeof ctx?.saveChat === 'function') ctx.saveChat();
+    } catch (e) {
+        console.warn('[NI] 用户代入回复替换失败:', e);
+    }
 }
 
 function niToggleCharsByStage(stageIdx, enable) {
@@ -8694,12 +8889,17 @@ async function onPromptReady(eventData) {
     if (S.characters.length) {
         const userSubCfg = niGetUserSubConfig();
         const userSubCharIdx = parseInt(userSubCfg.userSubCharIdx, 10);
-        const userSubPlayMode = userSubCfg.userSubEnabled && niIsUserSubPlayMode(userSubCfg);
+        const userSubEnabled = !!userSubCfg.userSubEnabled;
+        const userSubPlayMode = userSubEnabled && niIsUserSubPlayMode(userSubCfg);
         S.characters.forEach((c, idx) => {
             if (!c.name) return;
             if (c.enabled === false) return;
-            const tagName = userSubPlayMode && idx === userSubCharIdx ? '原著角色本人' : '原著角色NPC';
-            const lines = [`[${tagName}：${c.name}（${c.role || '其他'}）]`];
+            const isUserSubChar = userSubEnabled && idx === userSubCharIdx;
+            const tagName = isUserSubChar
+                ? (userSubPlayMode ? '用户扮演原著角色资料' : '用户代入角色资料')
+                : '原著角色NPC';
+            const displayName = isUserSubChar ? '<user>' : c.name;
+            const lines = [`[${tagName}：${displayName}（${c.role || '其他'}）]`];
             const showRaw = c.showRaw !== false;
             const showAi  = c.showAi  !== false;
             if (showAi && niAiProfileHasContent(c.aiProfile)) {
@@ -8725,8 +8925,8 @@ async function onPromptReady(eventData) {
         const userSubCfg = niGetUserSubConfig();
         const charIntro = userSubCfg.userSubEnabled
             ? (niIsUserSubPlayMode(userSubCfg)
-                ? '说明：以下为原著角色资料。若“用户代入角色”已声明 <user> 正在扮演其中某个原著角色本人，则该角色资料属于 <user> 的既有身份与人物基础；其他角色仍作为NPC演绎。'
-                : '说明：以下为原著角色资料。若“用户代入角色”已声明 <user> 代表其中某个角色，则该角色资料可作为 <user> 的身份与人物基础；其他角色仍作为NPC演绎。')
+                ? '说明：以下为原著角色资料。标记为“用户扮演原著角色资料：<user>”的条目属于 <user> 的既有身份与人物基础，不是独立NPC；其他角色仍作为NPC演绎。'
+                : '说明：以下为原著角色资料。标记为“用户代入角色资料：<user>”的条目是 <user> 的原著身份、关系、经历与处境来源，不是独立NPC；其他角色仍作为NPC演绎。不要把该代入原角写成与 <user> 同时存在的另一个人。')
             : '说明：以下原著角色默认作为故事中的独立NPC处理，不默认等同于 <user>；不要把原著角色经历、剧情事件、身份关系或原著角色曾经做出的选择自动映射到 <user>。';
         const charContent = `[原著角色人设]\n${charIntro}\n\n${charLines.join('\n\n')}\n[/原著角色人设]`;
         doInject(`${EXT_NAME}_char`, charContent, charPos, charDepth, charRole);
@@ -10950,6 +11150,8 @@ jQuery(async () => {
 
     // 监听酒馆事件：发消息前注入上下文
     eventSource.on(event_types.CHAT_COMPLETION_PROMPT_READY, onPromptReady);
+    eventSource.makeLast?.(event_types.CHAT_COMPLETION_PROMPT_READY, niFinalUserSubPromptRewrite);
+    eventSource.makeLast?.(event_types.MESSAGE_RECEIVED, niPostprocessUserSubMessage);
     niBindDeviationAutoUpdateEvents();
     niResetDevAutoCounter();
     setTimeout(() => {
@@ -13253,6 +13455,7 @@ jQuery(document).ready(function () {
                 .replace(/{B_BODY}/g,  curNode.body || '（暂无描述）') + niTbGetImmersionAppend(cfg);
             _inject(`${EXT_NAME}_tb_ongoing`, ongoingContent);
         });
+        eventSource.makeLast?.(event_types.CHAT_COMPLETION_PROMPT_READY, niFinalUserSubPromptRewrite);
     }
 });
 
