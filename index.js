@@ -1061,6 +1061,16 @@ function niHeavyPartFileNames(novelKey, fileKey = '', part = 'core') {
         .map(base => `${base}_${part}.json`);
 }
 
+function niStripCharAiRuntime(characters) {
+    return (Array.isArray(characters) ? characters : []).map(c => {
+        if (!c || typeof c !== 'object') return c;
+        const copy = { ...c };
+        delete copy.aiProfile;
+        delete copy.showAi;
+        return copy;
+    });
+}
+
 async function niServerUploadJson(name, payload) {
     const res = await fetch('/api/files/upload', {
         method: 'POST',
@@ -1085,7 +1095,7 @@ async function niServerLoadJsonByNames(names) {
 
 function niApplyHeavyCore(payload) {
     if (!payload) return;
-    if (payload._characters)   S.characters   = payload._characters;
+    if (payload._characters)   S.characters   = niStripCharAiRuntime(payload._characters);
     if (payload._plots) {
         S.plots = payload._plots;
         niNormalizePlotCollections();
@@ -1118,7 +1128,7 @@ async function niServerSaveHeavy(novelKey, fileKey = '') {
         novelKey,
         heavyFileKey,
         savedAt,
-        _characters:  S.characters,
+        _characters:  niStripCharAiRuntime(S.characters),
         _plots:       S.plots,
         _chunkMeta:   S.chunkMeta,
         _chunkStatus: S.chunkStatus,
@@ -4549,12 +4559,10 @@ function renderCharacters() {
             ? `<div class="ni-char-sleep-badge" title="${niEscAttr(autoSleepTitle)}">自动休眠</div>`
             : '';
         const detailHtml = niRenderRawDetail(c, i);
-        const aiEyeOn  = c.showAi  !== false;
+        const aiProfile = niGetCharAiProfile(i);
+        const aiEyeOn  = niGetCharAiShowEnabled(i);
 
-        const hasAiContent = c.aiProfile && (
-            typeof c.aiProfile === 'string' ? c.aiProfile.trim() :
-            (c.aiProfile.identity || c.aiProfile.appearance || c.aiProfile.personality || c.aiProfile.relations)
-        );
+        const hasAiContent = niCharAiProfileHasContent(aiProfile);
         const aiProfileHtml = hasAiContent
             ? `<div class="ni-char-ai-profile" id="ni-caip-${i}">
                 <div class="ni-char-ai-profile-hdr">
@@ -4564,7 +4572,7 @@ function renderCharacters() {
                   </button>
                 </div>
                 <div class="ni-char-ai-body">
-                  ${aiEyeOn ? niRenderAiFields(c.aiProfile) : '（已关闭注入）'}
+                  ${aiEyeOn ? niRenderAiFields(aiProfile) : '（已关闭注入）'}
                 </div>
               </div>`
             : '';
@@ -4632,19 +4640,19 @@ function renderCharacters() {
                   <div class="ni-cef-inner">
                     <div class="ni-cef-field">
                       <label class="ni-cef-label"><i class="ti ti-id-badge" aria-hidden="true"></i>身份</label>
-                      <textarea class="ni-cef-ta" id="ni-cta-ai-identity-${i}" placeholder="身份背景、出身、职位…">${niEscHtml((typeof c.aiProfile==='object'?c.aiProfile?.identity:'') || '')}</textarea>
+                      <textarea class="ni-cef-ta" id="ni-cta-ai-identity-${i}" placeholder="身份背景、出身、职位…">${niEscHtml(aiProfile?.identity || '')}</textarea>
                     </div>
                     <div class="ni-cef-field">
                       <label class="ni-cef-label"><i class="ti ti-eye" aria-hidden="true"></i>外貌</label>
-                      <textarea class="ni-cef-ta" id="ni-cta-ai-appearance-${i}" placeholder="外貌描写关键词…">${niEscHtml((typeof c.aiProfile==='object'?c.aiProfile?.appearance:'') || '')}</textarea>
+                      <textarea class="ni-cef-ta" id="ni-cta-ai-appearance-${i}" placeholder="外貌描写关键词…">${niEscHtml(aiProfile?.appearance || '')}</textarea>
                     </div>
                     <div class="ni-cef-field">
                       <label class="ni-cef-label"><i class="ti ti-sparkles" aria-hidden="true"></i>性格</label>
-                      <textarea class="ni-cef-ta" id="ni-cta-ai-personality-${i}" placeholder="性格特征…">${niEscHtml((typeof c.aiProfile==='object'?c.aiProfile?.personality:'') || '')}</textarea>
+                      <textarea class="ni-cef-ta" id="ni-cta-ai-personality-${i}" placeholder="性格特征…">${niEscHtml(aiProfile?.personality || '')}</textarea>
                     </div>
                     <div class="ni-cef-field">
                       <label class="ni-cef-label"><i class="ti ti-users" aria-hidden="true"></i>关系</label>
-                      <textarea class="ni-cef-ta" id="ni-cta-ai-relations-${i}" placeholder="角色名：关系描述，多个用分号分隔…">${niEscHtml((typeof c.aiProfile==='object'?c.aiProfile?.relations:'') || '')}</textarea>
+                      <textarea class="ni-cef-ta" id="ni-cta-ai-relations-${i}" placeholder="角色名：关系描述，多个用分号分隔…">${niEscHtml(aiProfile?.relations || '')}</textarea>
                     </div>
                   </div>
                 </div>
@@ -4701,7 +4709,7 @@ function niEditChar(i) {
     const rightCol = q(`#ni-cc-${i}`)?.querySelector('.ni-char-card-right');
     if (rightCol) rightCol.style.display = 'none';
     // 回填AI人设字段（兼容旧版字符串和新版对象格式）
-    const rawAp = c.aiProfile;
+    const rawAp = niGetCharAiProfile(i);
     let ap = {};
     if (rawAp && typeof rawAp === 'object') {
         ap = rawAp;
@@ -4726,14 +4734,10 @@ function niEditChar(i) {
     setAiField('identity'); setAiField('appearance'); setAiField('personality'); setAiField('relations');
     // 根据眼睛状态决定显示哪个编辑区
     const rawEyeOn = c.showRaw !== false;
-    const aiEyeOn  = c.showAi  !== false;
+    const aiEyeOn  = niGetCharAiShowEnabled(i);
     if (rawArea) rawArea.style.display = rawEyeOn ? 'block' : 'none';
     // AI编辑区：只要有aiProfile数据就显示（眼睛只控制注入，不控制编辑显隐）
-    const hasAiProfile = c.aiProfile && (
-        typeof c.aiProfile === 'string'
-            ? c.aiProfile.trim()
-            : (c.aiProfile.identity || c.aiProfile.appearance || c.aiProfile.personality || c.aiProfile.relations)
-    );
+    const hasAiProfile = niCharAiProfileHasContent(niGetCharAiProfile(i));
     if (aiArea) aiArea.style.display = hasAiProfile ? 'block' : 'none';
     // 编辑时隐藏展示区和粉框
     const detailEl2 = q(`#ni-cbio-${i}`);
@@ -4771,7 +4775,7 @@ function niRenderRawDetail(c, i) {
         <div class="ni-char-raw-body">${body}</div>
       </div>`;
 }
-function niSaveChar(i) {
+async function niSaveChar(i) {
     const form = q(`#ni-cef-${i}`);
     if (S.characters[i]) {
         S.characters[i].identity    = q(`#ni-cta-identity-${i}`)?.value?.trim()    || '';
@@ -4799,11 +4803,7 @@ function niSaveChar(i) {
             const aiAppearance  = q(`#ni-cta-ai-appearance-${i}`)?.value?.trim()  || '';
             const aiPersonality = q(`#ni-cta-ai-personality-${i}`)?.value?.trim() || '';
             const aiRelations   = q(`#ni-cta-ai-relations-${i}`)?.value?.trim()   || '';
-            if (aiIdentity || aiAppearance || aiPersonality || aiRelations) {
-                S.characters[i].aiProfile = { identity: aiIdentity, appearance: aiAppearance, personality: aiPersonality, relations: aiRelations };
-            } else {
-                delete S.characters[i].aiProfile;
-            }
+            await niSetCharAiProfile(i, { identity: aiIdentity, appearance: aiAppearance, personality: aiPersonality, relations: aiRelations });
         }
     }
     if (form) form.style.display = 'none';
@@ -5229,6 +5229,11 @@ function niIsUserSubPlayMode(cfg = niGetUserSubConfig()) {
     return niNormalizeUserSubMode(cfg.userSubMode) === 'play';
 }
 
+function niIsUserSubSelectedChar(idx, cfg = niGetUserSubConfig()) {
+    if (!cfg.userSubEnabled) return false;
+    return parseInt(cfg.userSubCharIdx, 10) === idx;
+}
+
 function niUserSubDefaultAliasesForChar(charIdx) {
     const idx = parseInt(charIdx, 10);
     const c = S.characters[idx];
@@ -5351,6 +5356,101 @@ async function niSaveUserSubChatStates(states) {
     } catch (e) {
         console.warn('[NI] 用户代入称呼状态保存失败:', e);
     }
+}
+
+function niCharAiProfileKey(i) {
+    const c = S.characters?.[i] || {};
+    const name = String(c.name || '').trim() || `角色${i}`;
+    const role = String(c.role || '其他').trim();
+    const firstStage = getCharFirstStage(c) ?? '';
+    return `${name}@@${role}@@${firstStage}`;
+}
+
+function niNormalizeCharAiProfile(profile) {
+    if (profile && typeof profile === 'object' && !Array.isArray(profile)) {
+        return {
+            identity:    String(profile.identity    || '').trim(),
+            appearance:  String(profile.appearance  || '').trim(),
+            personality: String(profile.personality || '').trim(),
+            relations:   String(profile.relations   || '').trim(),
+        };
+    }
+    if (typeof profile === 'string' && profile.trim()) {
+        return { identity: profile.trim(), appearance: '', personality: '', relations: '' };
+    }
+    return { identity: '', appearance: '', personality: '', relations: '' };
+}
+
+function niCharAiProfileHasContent(profile) {
+    const p = niNormalizeCharAiProfile(profile);
+    return !!(p.identity || p.appearance || p.personality || p.relations);
+}
+
+function niGetCharAiChatState({ ensure = false } = {}) {
+    try {
+        const ctx = getContext();
+        const root = ctx?.chat?.[0];
+        if (!root) return null;
+        if (ensure) root.ni_char_ai = root.ni_char_ai || {};
+        const state = root.ni_char_ai;
+        if (!state || typeof state !== 'object') return ensure ? root.ni_char_ai : null;
+        if (ensure) {
+            state.profiles = state.profiles && typeof state.profiles === 'object' ? state.profiles : {};
+            state.showAi = state.showAi && typeof state.showAi === 'object' ? state.showAi : {};
+        }
+        return state;
+    } catch (_) {
+        return null;
+    }
+}
+
+async function niSaveCharAiChatState() {
+    try {
+        const ctx = getContext();
+        if (typeof ctx?.saveChat === 'function') await ctx.saveChat();
+    } catch (e) {
+        console.warn('[NI] AI 实时人设聊天状态保存失败:', e);
+    }
+}
+
+function niGetCharAiProfile(i) {
+    const state = niGetCharAiChatState();
+    const key = niCharAiProfileKey(i);
+    const profile = state?.profiles?.[key];
+    return niCharAiProfileHasContent(profile) ? niNormalizeCharAiProfile(profile) : null;
+}
+
+async function niSetCharAiProfile(i, profile, { saveChat = true } = {}) {
+    const state = niGetCharAiChatState({ ensure: true });
+    if (!state) return false;
+    const key = niCharAiProfileKey(i);
+    const next = niNormalizeCharAiProfile(profile);
+    if (niCharAiProfileHasContent(next)) {
+        state.profiles[key] = next;
+    } else {
+        delete state.profiles[key];
+    }
+    if (S.characters?.[i]) delete S.characters[i].aiProfile;
+    if (saveChat) await niSaveCharAiChatState();
+    return true;
+}
+
+function niGetCharAiShowEnabled(i) {
+    const state = niGetCharAiChatState();
+    const key = niCharAiProfileKey(i);
+    if (state?.showAi && Object.prototype.hasOwnProperty.call(state.showAi, key)) {
+        return state.showAi[key] !== false;
+    }
+    return true;
+}
+
+async function niSetCharAiShowEnabled(i, enabled, { saveChat = true } = {}) {
+    const state = niGetCharAiChatState({ ensure: true });
+    if (!state) return false;
+    state.showAi[niCharAiProfileKey(i)] = !!enabled;
+    if (S.characters?.[i]) delete S.characters[i].showAi;
+    if (saveChat) await niSaveCharAiChatState();
+    return true;
 }
 
 function niGetUserSubAliasOverride(alias) {
@@ -6259,15 +6359,6 @@ let _genCharsAbortController = null;
 const NI_CHAR_AI_PROFILE_RETRIES = 3;
 const NI_CHAR_AI_PROFILE_RESPONSE_LENGTH = 2000;
 
-function niNormalizeCharAiProfile(profile) {
-    return {
-        identity:    String(profile?.identity    || '').trim(),
-        appearance:  String(profile?.appearance  || '').trim(),
-        personality: String(profile?.personality || '').trim(),
-        relations:   String(profile?.relations   || '').trim(),
-    };
-}
-
 function niAiProfileHasContent(profile) {
     const p = typeof profile === 'string'
         ? { identity: String(profile || '').trim() }
@@ -6477,6 +6568,7 @@ function niParseCharAiProfile(raw, c) {
 async function niGenerateCharAiProfileWithRetry(i, charCtx, onRetry = null, { signal = null, noEvidenceMode = 'skip' } = {}) {
     const c = S.characters[i];
     if (!c) throw new Error('角色不存在');
+    if (niIsUserSubSelectedChar(i)) throw new Error('当前角色已由“用户代入角色”接管，不发送原角色人设给 AI');
 
     if (!charCtx?.hasTargetEvidence) {
         if (noEvidenceMode === 'clear') return niEmptyCharAiProfile({ _noEvidence: true });
@@ -6511,17 +6603,13 @@ async function niGenerateCharAiProfileWithRetry(i, charCtx, onRetry = null, { si
     throw new Error(`已重试 ${NI_CHAR_AI_PROFILE_RETRIES} 次仍失败：${lastErr?.message || lastErr || '未知错误'}`);
 }
 
-function niApplyCharAiProfile(i, profile) {
+async function niApplyCharAiProfile(i, profile) {
     const c2 = S.characters[i];
     if (!c2) return;
 
-    const nextProfile = niNormalizeCharAiProfile(profile);
-    const hasContent = niAiProfileHasContent(nextProfile);
-    if (hasContent) {
-        c2.aiProfile = nextProfile;
-    } else {
-        delete c2.aiProfile;
-    }
+    const aiProfile = niNormalizeCharAiProfile(profile);
+    const hasContent = niAiProfileHasContent(aiProfile);
+    await niSetCharAiProfile(i, aiProfile);
 
     const detailEl = q(`#ni-cbio-${i}`);
     if (detailEl) {
@@ -6540,7 +6628,7 @@ function niApplyCharAiProfile(i, profile) {
     }
     if (aipEl) {
         if (hasContent) {
-            const aiEyeOn = c2.showAi !== false;
+            const aiEyeOn = niGetCharAiShowEnabled(i);
             aipEl.className = 'ni-char-ai-profile';
             aipEl.style.display = '';
             aipEl.innerHTML = `
@@ -6548,7 +6636,7 @@ function niApplyCharAiProfile(i, profile) {
                 <span class="ni-char-ai-profile-lbl"><i class="ti ti-sparkles"></i>AI 实时人设</span>
                 <button class="ni-char-eye ni-char-eye-ai${aiEyeOn ? ' on' : ''}" data-char-idx="${i}" title="AI人设注入开/关"><i class="ti ${aiEyeOn ? 'ti-eye' : 'ti-eye-off'}"></i></button>
               </div>
-              <div class="ni-char-ai-body">${aiEyeOn ? niRenderAiFields(c2.aiProfile) : '（已关闭注入）'}</div>`;
+              <div class="ni-char-ai-body">${aiEyeOn ? niRenderAiFields(aiProfile) : '（已关闭注入）'}</div>`;
         } else {
             aipEl.remove();
         }
@@ -6556,7 +6644,7 @@ function niApplyCharAiProfile(i, profile) {
 
     ['identity', 'appearance', 'personality', 'relations'].forEach(key => {
         const el = q(`#ni-cta-ai-${key}-${i}`);
-        if (el) el.value = c2.aiProfile?.[key] || '';
+        if (el) el.value = aiProfile[key] || '';
     });
     const aiArea = q(`#ni-cef-ai-${i}`);
     if (aiArea) aiArea.style.display = hasContent ? 'block' : 'none';
@@ -6600,7 +6688,10 @@ async function niGenCharsManual(silent = false, skipIndices = null) {
     if (prog) prog.style.display = 'flex';
     if (card) card.classList.add('ni-has-prog');
 
-    const enabledIndices = S.characters.map((c, i) => c.enabled ? i : -1).filter(i => i !== -1 && !(skipIndices && skipIndices.has(i)));
+    const userSubCfg = niGetUserSubConfig();
+    const enabledIndices = S.characters
+        .map((c, i) => c.enabled ? i : -1)
+        .filter(i => i !== -1 && !niIsUserSubSelectedChar(i, userSubCfg) && !(skipIndices && skipIndices.has(i)));
     const total = enabledIndices.length;
     const failures = [];
     let skipped = 0;
@@ -6627,7 +6718,7 @@ async function niGenCharsManual(silent = false, skipIndices = null) {
                 cancelled = true;
                 break;
             }
-            niApplyCharAiProfile(i, profile);
+            await niApplyCharAiProfile(i, profile);
             if (profile._noEvidence) cleared++;
             else done++;
         } catch (e) {
@@ -6700,6 +6791,11 @@ async function niGenOneCharManual(i) {
 
     _genCharsRunning = true;
     const c = S.characters[i];
+    if (niIsUserSubSelectedChar(i)) {
+        alert('当前角色已被“用户代入角色”使用，不会作为独立原著角色发送给 AI 更新人设。');
+        _genCharsRunning = false;
+        return;
+    }
     const btn = q(`.ni-char-ai-one-btn[data-char-idx="${i}"]`);
     const oldHtml = btn?.innerHTML;
     if (btn) {
@@ -6713,7 +6809,7 @@ async function niGenOneCharManual(i) {
         const profile = await niGenerateCharAiProfileWithRetry(i, charCtx, (retryNo, err) => {
             console.warn(`[NI] 角色 ${c.name} 人设第 ${retryNo} 次重试：`, err);
         }, { noEvidenceMode: 'skip' });
-        niApplyCharAiProfile(i, profile);
+        await niApplyCharAiProfile(i, profile);
         niSaveSettings();
     } catch (e) {
         console.warn(`[NI] 角色 ${c.name} 人设更新失败:`, e);
@@ -8888,29 +8984,23 @@ async function onPromptReady(eventData) {
     const charLines = [];
     if (S.characters.length) {
         const userSubCfg = niGetUserSubConfig();
-        const userSubCharIdx = parseInt(userSubCfg.userSubCharIdx, 10);
-        const userSubEnabled = !!userSubCfg.userSubEnabled;
-        const userSubPlayMode = userSubEnabled && niIsUserSubPlayMode(userSubCfg);
         S.characters.forEach((c, idx) => {
             if (!c.name) return;
             if (c.enabled === false) return;
-            const isUserSubChar = userSubEnabled && idx === userSubCharIdx;
-            const tagName = isUserSubChar
-                ? (userSubPlayMode ? '用户扮演原著角色资料' : '用户代入角色资料')
-                : '原著角色NPC';
-            const displayName = isUserSubChar ? '<user>' : c.name;
-            const lines = [`[${tagName}：${displayName}（${c.role || '其他'}）]`];
+            if (niIsUserSubSelectedChar(idx, userSubCfg)) return;
+            const lines = [`[原著角色NPC：${c.name}（${c.role || '其他'}）]`];
             const showRaw = c.showRaw !== false;
-            const showAi  = c.showAi  !== false;
-            if (showAi && niAiProfileHasContent(c.aiProfile)) {
-                if (typeof c.aiProfile === 'object') {
-                    const p = c.aiProfile;
+            const showAi  = niGetCharAiShowEnabled(idx);
+            const aiProfile = niGetCharAiProfile(idx);
+            if (showAi && aiProfile) {
+                if (typeof aiProfile === 'object') {
+                    const p = aiProfile;
                     if (p.identity)    lines.push(`身份：${p.identity}`);
                     if (p.appearance)  lines.push(`外貌：${p.appearance}`);
                     if (p.personality) lines.push(`性格：${p.personality}`);
                     if (p.relations)   lines.push(`关系：${p.relations}`);
                 } else {
-                    lines.push(c.aiProfile);
+                    lines.push(aiProfile);
                 }
             } else if (showRaw) {
                 if (c.identity)    lines.push(`身份：${c.identity}`);
@@ -8925,8 +9015,8 @@ async function onPromptReady(eventData) {
         const userSubCfg = niGetUserSubConfig();
         const charIntro = userSubCfg.userSubEnabled
             ? (niIsUserSubPlayMode(userSubCfg)
-                ? '说明：以下为原著角色资料。标记为“用户扮演原著角色资料：<user>”的条目属于 <user> 的既有身份与人物基础，不是独立NPC；其他角色仍作为NPC演绎。'
-                : '说明：以下为原著角色资料。标记为“用户代入角色资料：<user>”的条目是 <user> 的原著身份、关系、经历与处境来源，不是独立NPC；其他角色仍作为NPC演绎。不要把该代入原角写成与 <user> 同时存在的另一个人。')
+                ? '说明：以下为原著角色NPC资料。已由“用户代入角色”声明为 <user> 本人的原著角色不会在此处作为独立NPC发送；其他角色仍作为NPC演绎。'
+                : '说明：以下为原著角色NPC资料。已由“用户代入角色”映射到 <user> 的原著角色不会在此处作为独立NPC发送；其他角色仍作为NPC演绎。')
             : '说明：以下原著角色默认作为故事中的独立NPC处理，不默认等同于 <user>；不要把原著角色经历、剧情事件、身份关系或原著角色曾经做出的选择自动映射到 <user>。';
         const charContent = `[原著角色人设]\n${charIntro}\n\n${charLines.join('\n\n')}\n[/原著角色人设]`;
         doInject(`${EXT_NAME}_char`, charContent, charPos, charDepth, charRole);
@@ -9700,7 +9790,7 @@ async function niExportData() {
         _ni_export_time: new Date().toISOString(),
         settings: {},
         runtime: {
-            _characters:    S.characters,
+            _characters:    niStripCharAiRuntime(S.characters),
             _plots:         S.plots,
             _stageStates:   S.stageStates,
             _stageSummaries:S.stageSummaries,
@@ -9812,7 +9902,7 @@ async function niImportData(file) {
                 const heavyFileKey = niSnapshotFileKey(snapName, importedKey);
                 // 旧版 JSON 里重数据直接写服务端文件，snap.data 只存轻量字段
                 const oldS = { characters: S.characters, plots: S.plots, chunkResults: S.chunkResults, chunkMeta: S.chunkMeta, chunkStatus: S.chunkStatus, styleGuide: S.styleGuide };
-                S.characters   = rt._characters   || [];
+                S.characters   = niStripCharAiRuntime(rt._characters);
                 S.plots        = rt._plots        || { main: [], sub: [], pivot: [] };
                 niNormalizePlotCollections();
                 S.chunkResults = rt._chunkResults || [];
@@ -9937,7 +10027,7 @@ async function niImportData(file) {
 
         // 把重数据写服务端文件（暂存到 S 再写再还原）
         const oldS2 = { characters: S.characters, plots: S.plots, chunkResults: S.chunkResults, chunkMeta: S.chunkMeta, chunkStatus: S.chunkStatus, styleGuide: S.styleGuide };
-        S.characters   = rt._characters   || [];
+        S.characters   = niStripCharAiRuntime(rt._characters);
         S.plots        = rt._plots        || { main: [], sub: [], pivot: [] };
         niNormalizePlotCollections();
         S.chunkResults = rt._chunkResults || [];
@@ -10728,8 +10818,8 @@ jQuery(async () => {
     $app.on('click', '.ni-char-edit-btn', function() {
         niEditChar(parseInt($(this).data('char-idx')));
     });
-    $app.on('click', '.ni-char-save-btn', function() {
-        niSaveChar(parseInt($(this).data('char-idx')));
+    $app.on('click', '.ni-char-save-btn', async function() {
+        await niSaveChar(parseInt($(this).data('char-idx')));
     });
     $app.on('click', '#ni-char-auto-sleep-btn', function() {
         const cfg = extension_settings[EXT_NAME] || {};
@@ -10760,10 +10850,10 @@ jQuery(async () => {
         renderCharacters();
     });
     // AI人设眼睛（粉框内 或 右列）
-    $app.on('click', '.ni-char-eye-ai, .ni-char-eye-ai-r', function() {
+    $app.on('click', '.ni-char-eye-ai, .ni-char-eye-ai-r', async function() {
         const i = parseInt($(this).data('char-idx'));
         if (!S.characters[i]) return;
-        S.characters[i].showAi = S.characters[i].showAi === false ? true : false;
+        await niSetCharAiShowEnabled(i, !niGetCharAiShowEnabled(i));
         niSaveSettings();
         renderCharacters();
     });
@@ -12775,12 +12865,14 @@ async function niTbGenerateInfer() {
         const curNode = nodes[S.tbCurIdx] || nodes[0] || { title: '（未知）', body: '' };
 
         // 角色人设（只取已启用的角色，最多8个防止 token 过长）
+        const userSubCfg = niGetUserSubConfig();
         const charLines = (S.characters || [])
-            .filter(c => c.enabled !== false && c.name)
+            .map((c, idx) => ({ c, idx }))
+            .filter(({ c, idx }) => c.enabled !== false && c.name && !niIsUserSubSelectedChar(idx, userSubCfg))
             .slice(0, 8)
-            .map(c => {
+            .map(({ c, idx }) => {
                 const parts = [`【${c.name}（${c.role || '其他'}）】`];
-                const p = c.aiProfile;
+                const p = niGetCharAiShowEnabled(idx) ? niGetCharAiProfile(idx) : null;
                 if (p && typeof p === 'object') {
                     if (p.identity)    parts.push(`身份：${p.identity}`);
                     if (p.personality) parts.push(`性格：${p.personality}`);
