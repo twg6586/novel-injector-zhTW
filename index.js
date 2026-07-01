@@ -5234,6 +5234,10 @@ function niIsUserSubSelectedChar(idx, cfg = niGetUserSubConfig()) {
     return parseInt(cfg.userSubCharIdx, 10) === idx;
 }
 
+function niIsUserSubReplaceSelectedChar(idx, cfg = niGetUserSubConfig()) {
+    return niIsUserSubSelectedChar(idx, cfg) && !niIsUserSubPlayMode(cfg);
+}
+
 function niUserSubDefaultAliasesForChar(charIdx) {
     const idx = parseInt(charIdx, 10);
     const c = S.characters[idx];
@@ -6568,7 +6572,7 @@ function niParseCharAiProfile(raw, c) {
 async function niGenerateCharAiProfileWithRetry(i, charCtx, onRetry = null, { signal = null, noEvidenceMode = 'skip' } = {}) {
     const c = S.characters[i];
     if (!c) throw new Error('角色不存在');
-    if (niIsUserSubSelectedChar(i)) throw new Error('当前角色已由“用户代入角色”接管，不发送原角色人设给 AI');
+    if (niIsUserSubReplaceSelectedChar(i)) throw new Error('当前角色已由“用户代入角色”替换，不发送原角色人设给 AI');
 
     if (!charCtx?.hasTargetEvidence) {
         if (noEvidenceMode === 'clear') return niEmptyCharAiProfile({ _noEvidence: true });
@@ -6691,7 +6695,7 @@ async function niGenCharsManual(silent = false, skipIndices = null) {
     const userSubCfg = niGetUserSubConfig();
     const enabledIndices = S.characters
         .map((c, i) => c.enabled ? i : -1)
-        .filter(i => i !== -1 && !niIsUserSubSelectedChar(i, userSubCfg) && !(skipIndices && skipIndices.has(i)));
+        .filter(i => i !== -1 && !niIsUserSubReplaceSelectedChar(i, userSubCfg) && !(skipIndices && skipIndices.has(i)));
     const total = enabledIndices.length;
     const failures = [];
     let skipped = 0;
@@ -6791,8 +6795,8 @@ async function niGenOneCharManual(i) {
 
     _genCharsRunning = true;
     const c = S.characters[i];
-    if (niIsUserSubSelectedChar(i)) {
-        alert('当前角色已被“用户代入角色”使用，不会作为独立原著角色发送给 AI 更新人设。');
+    if (niIsUserSubReplaceSelectedChar(i)) {
+        alert('当前角色已被“用户代入角色”替换，不会作为独立原著角色发送给 AI 更新人设。');
         _genCharsRunning = false;
         return;
     }
@@ -8987,8 +8991,11 @@ async function onPromptReady(eventData) {
         S.characters.forEach((c, idx) => {
             if (!c.name) return;
             if (c.enabled === false) return;
-            if (niIsUserSubSelectedChar(idx, userSubCfg)) return;
-            const lines = [`[原著角色NPC：${c.name}（${c.role || '其他'}）]`];
+            if (niIsUserSubReplaceSelectedChar(idx, userSubCfg)) return;
+            const isUserSubPlayChar = niIsUserSubSelectedChar(idx, userSubCfg) && niIsUserSubPlayMode(userSubCfg);
+            const lines = isUserSubPlayChar
+                ? [`[用户扮演原著角色资料：<user>（原著角色：${c.name}；${c.role || '其他'}）]`]
+                : [`[原著角色NPC：${c.name}（${c.role || '其他'}）]`];
             const showRaw = c.showRaw !== false;
             const showAi  = niGetCharAiShowEnabled(idx);
             const aiProfile = niGetCharAiProfile(idx);
@@ -9015,7 +9022,7 @@ async function onPromptReady(eventData) {
         const userSubCfg = niGetUserSubConfig();
         const charIntro = userSubCfg.userSubEnabled
             ? (niIsUserSubPlayMode(userSubCfg)
-                ? '说明：以下为原著角色NPC资料。已由“用户代入角色”声明为 <user> 本人的原著角色不会在此处作为独立NPC发送；其他角色仍作为NPC演绎。'
+                ? '说明：以下为原著角色资料。标记为“用户扮演原著角色资料：<user>”的条目属于 <user> 的既有身份与人物基础，不是独立NPC；其他角色仍作为NPC演绎。'
                 : '说明：以下为原著角色NPC资料。已由“用户代入角色”映射到 <user> 的原著角色不会在此处作为独立NPC发送；其他角色仍作为NPC演绎。')
             : '说明：以下原著角色默认作为故事中的独立NPC处理，不默认等同于 <user>；不要把原著角色经历、剧情事件、身份关系或原著角色曾经做出的选择自动映射到 <user>。';
         const charContent = `[原著角色人设]\n${charIntro}\n\n${charLines.join('\n\n')}\n[/原著角色人设]`;
@@ -12868,10 +12875,13 @@ async function niTbGenerateInfer() {
         const userSubCfg = niGetUserSubConfig();
         const charLines = (S.characters || [])
             .map((c, idx) => ({ c, idx }))
-            .filter(({ c, idx }) => c.enabled !== false && c.name && !niIsUserSubSelectedChar(idx, userSubCfg))
+            .filter(({ c, idx }) => c.enabled !== false && c.name && !niIsUserSubReplaceSelectedChar(idx, userSubCfg))
             .slice(0, 8)
             .map(({ c, idx }) => {
-                const parts = [`【${c.name}（${c.role || '其他'}）】`];
+                const isUserSubPlayChar = niIsUserSubSelectedChar(idx, userSubCfg) && niIsUserSubPlayMode(userSubCfg);
+                const parts = [isUserSubPlayChar
+                    ? `【<user>（原著角色：${c.name}；${c.role || '其他'}）】`
+                    : `【${c.name}（${c.role || '其他'}）】`];
                 const p = niGetCharAiShowEnabled(idx) ? niGetCharAiProfile(idx) : null;
                 if (p && typeof p === 'object') {
                     if (p.identity)    parts.push(`身份：${p.identity}`);
