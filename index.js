@@ -246,8 +246,8 @@ const CLEAN_PROMPT = `小說分階段精準壓縮
 - characters、character_aliases 與 plots 是否均存在且為數組；無內容時是否輸出 []
 - plots 中每個節點是否包含 order/type/title/body/sub_notes/branch_links/time/location/chunk_index
 - branch_links 是否只引用本批次真實存在的 sub title 或【伏筆】xxx
-- 是否沒有 Markdown 代碼塊、道歉、解釋或結構外文本`
-- 所有輸出（包含 JSON 的 key 與 value、正文等）請務必絕對使用「繁體中文（zh-TW）」撰寫。;
+- 是否沒有 Markdown 代碼塊、道歉、解釋或結構外文本
+- 所有輸出（包含 JSON 的 key 與 value、正文等）請務必絕對使用「繁體中文（zh-TW）」撰寫。`;
 
 
 // 全局提示詞默認值
